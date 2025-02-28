@@ -4,8 +4,9 @@ Log into HPC
 
 
 ```bash
-# Start a session on a non-login node
+# Start a session on a non-login node (faster conda env create and download)
 srun --pty bash
+#srun --pty -p nodes bash?
 
 # Clone this repo
 git clone htps://github.com/this
@@ -15,8 +16,11 @@ cd BraTS-CycleGAN+SwinUNETR
 conda env create -f environment.yml
 
 # Activate the environment
-conda activate pytorch-BraTS2020-unet-segmentation
+conda activate BraTS
 
-# Verify GPU support
-python gpucheck.py
+
 ```
+
+
+bonus commands
+conda env remove -n BraTS
