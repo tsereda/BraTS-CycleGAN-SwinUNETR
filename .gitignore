@@ -1,1 +1,3 @@
-brats2020-training-data/
+brats20-dataset-training/
+slurm_logs/
+processed_data/
