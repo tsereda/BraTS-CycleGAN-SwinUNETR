@@ -1,11 +1,11 @@
-Log into HPC
+First, log into HPC
 
 ```bash
-# Start a session on a non-login node (faster conda env create and download)
+# Start a session on a high memory node (only for env create and download_data)
 srun --pty -p himem bash
 
 # Clone this repo
-git clone htps://github.com/this
+git clone https://github.com/tsereda/BraTS-CycleGAN-SwinUNETR.git
 cd BraTS-CycleGAN+SwinUNETR
 
 # Create conda environment from the provided environment.yml
@@ -20,10 +20,11 @@ python download_data.py
 # Submit data preprocessing job
 sbatch data_preprocessing.sh
 
-
+# Train
+sbatch train_swinunetr.sh
 ```
 
 
 bonus commands
-conda env remove -n BraTS
 
+conda env remove -n BraTS
