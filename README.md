@@ -25,6 +25,8 @@ sbatch train_swinunetr.sh
 ```
 
 
-bonus commands
+
+If needed:
+
 
 conda env remove -n BraTS
