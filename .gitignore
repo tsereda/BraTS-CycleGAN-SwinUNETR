@@ -1,3 +1,4 @@
 brats20-dataset-training/
-slurm_logs/
+logs/
 processed_data/
+*.pyc

@@ -7,8 +7,8 @@
 #SBATCH --mem=8G
 #SBATCH --time=2:00:00
 
-#SBATCH --output=slurm_logs/preprocess_%j.out
-#SBATCH --error=slurm_logs/preprocess_%j.err
+#SBATCH --output=logs/preprocess_%j.out
+#SBATCH --error=logs/preprocess_%j.err
 
 echo "Starting preprocessing..."
 
