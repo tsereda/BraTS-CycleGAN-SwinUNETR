@@ -6,52 +6,55 @@ from typing import Optional
 
 class DiceLoss(nn.Module):
     """
-    Optimized Dice loss for 3D segmentation with improved stability
+    Dice Loss for multi-class segmentation
     """
-    def __init__(self, 
-                 weights: Optional[torch.Tensor] = None, 
-                 smooth: float = 1e-5,
-                 square_denominator: bool = False):
-        super().__init__()
-        self.weights = weights
+    def __init__(self, weight=None, smooth=1.0):
+        super(DiceLoss, self).__init__()
         self.smooth = smooth
-        self.square_denominator = square_denominator
+        self.weight = weight
         
-    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    def forward(self, logits, targets):
+        """
+        Args:
+            logits: Tensor of shape [B, C, D, H, W] where C is the number of classes
+            targets: Tensor of shape [B, D, H, W] with class indices or [B, C, D, H, W] one-hot
+        """
+        num_classes = logits.shape[1]
+        
         # Get probabilities from logits
         probs = F.softmax(logits, dim=1)
         
-        # One-hot encode targets: (B, C, D, H, W)
-        targets_one_hot = F.one_hot(targets, num_classes=logits.size(1)).permute(0, 4, 1, 2, 3).float()
-        
-        # Flatten predictions and targets
-        probs = probs.view(probs.size(0), probs.size(1), -1)
-        targets_one_hot = targets_one_hot.view(targets_one_hot.size(0), targets_one_hot.size(1), -1)
-        
-        # Calculate Dice coefficient for each class
-        # numerator: 2 * sum(pred * target) + smooth
-        # denominator: sum(pred) + sum(target) + smooth
-        numerator = 2 * torch.sum(probs * targets_one_hot, dim=2) + self.smooth
-        
-        if self.square_denominator:
-            denominator = torch.sum(probs ** 2, dim=2) + torch.sum(targets_one_hot ** 2, dim=2) + self.smooth
+        # Check if targets are already one-hot
+        if targets.shape != probs.shape:
+            # Convert targets to one-hot if needed
+            targets_one_hot = F.one_hot(targets.long(), num_classes=num_classes)
+            # Rearrange to match shape [B, C, D, H, W]
+            targets_one_hot = targets_one_hot.permute(0, 4, 1, 2, 3).contiguous()
         else:
-            denominator = torch.sum(probs, dim=2) + torch.sum(targets_one_hot, dim=2) + self.smooth
+            targets_one_hot = targets
             
-        dice_per_class = numerator / denominator  # Shape: (B, C)
+        # Ensure shapes match for debugging
+        if probs.shape != targets_one_hot.shape:
+            print(f"Shape mismatch: probs {probs.shape}, targets_one_hot {targets_one_hot.shape}")
+            raise ValueError(f"Shape mismatch in DiceLoss: {probs.shape} vs {targets_one_hot.shape}")
+            
+        # Flatten for dice calculation while keeping batch and class dimensions
+        probs_flat = probs.view(probs.shape[0], probs.shape[1], -1)
+        targets_flat = targets_one_hot.view(targets_one_hot.shape[0], targets_one_hot.shape[1], -1)
+        
+        # Calculate intersection and dice score
+        numerator = 2 * torch.sum(probs_flat * targets_flat, dim=2) + self.smooth
+        denominator = torch.sum(probs_flat, dim=2) + torch.sum(targets_flat, dim=2) + self.smooth
+        
+        # Calculate class-wise dice scores
+        dice_scores = numerator / denominator
         
         # Apply class weights if provided
-        if self.weights is not None:
-            weights = self.weights.to(dice_per_class.device)
-            dice_per_class = dice_per_class * weights
+        if self.weight is not None:
+            dice_scores = dice_scores * self.weight
             
-        # Calculate mean Dice over classes
-        dice_loss = 1.0 - dice_per_class.mean()
-        
-        # Ensure loss is not negative
-        dice_loss = torch.clamp(dice_loss, min=0.0)
-            
-        return dice_loss
+        # Return mean dice loss (1 - dice score)
+        return 1.0 - dice_scores.mean()
 
 
 class FocalLoss(nn.Module):
@@ -115,8 +118,8 @@ class CombinedLoss(nn.Module):
         super().__init__()
         self.dice_weight = dice_weight
         self.focal_weight = focal_weight
-        self.dice_loss = DiceLoss(weights=class_weights)
-        self.focal_loss = FocalLoss(weights=class_weights)
+        self.dice_loss = DiceLoss(weight=class_weights)
+        self.focal_loss = FocalLoss(weight=class_weights)
         
     def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         dice = self.dice_loss(logits, targets)

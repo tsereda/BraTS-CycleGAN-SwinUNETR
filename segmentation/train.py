@@ -12,7 +12,7 @@ import time
 from tqdm import tqdm
 
 # Import from custom modules
-from unet3d_model import UNet3D
+from swin_unetr_model import SwinUNETR
 from dataset import get_data_loaders, BraTSDataset
 from losses import CombinedLoss
 
@@ -192,11 +192,12 @@ def train_model(
     class_weights = class_weights.to(device)
     
     # Initialize model
-    model = UNet3D(
-        in_channels=4,
-        num_classes=4,
-        init_features=16
+    model = SwinUNETR(
+    in_channels=4,
+    num_classes=4,
+    init_features=16  # This will be internally scaled
     )
+
     model.initialize_weights()
     model = model.to(device)
     

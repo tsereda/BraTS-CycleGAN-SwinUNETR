@@ -1,0 +1,42 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: brats-seg
+spec:
+  template:
+    spec:
+      containers:
+      - name: demo
+        image: gitlab-registry.nrp-nautilus.io/prp/jupyter-stack/prp
+        command:
+        - "python"
+        args:
+        - "/opt/repo/BraTS-CycleGAN-SwinUNETR/gpucheck.py"
+        volumeMounts:
+        - name: git-repo
+          mountPath: /opt/repo
+        resources:
+          limits:
+            memory: 6Gi
+            cpu: "6"
+            nvidia.com/gpu: "1"
+          requests:
+            memory: 4Gi
+            cpu: "1"
+            nvidia.com/gpu: "1"
+      initContainers:
+      - name: init-clone-repo
+        image: alpine/git
+        args:
+          - clone
+          - --single-branch
+          - https://gitlab.nrp-nautilus.io/timothy.sereda/BraTS-CycleGAN-SwinUNETR
+          - /opt/repo/BraTS-CycleGAN-SwinUNETR
+        volumeMounts:
+          - name: git-repo
+            mountPath: /opt/repo
+      volumes:
+      - name: git-repo
+        emptyDir: {}
+      restartPolicy: Never
+  backoffLimit: 5
