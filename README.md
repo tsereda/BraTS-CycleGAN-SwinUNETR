@@ -30,3 +30,7 @@ If needed:
 
 
 conda env remove -n BraTS
+
+---NAUT
+
+kubectl exec -it transfer-pod -- /bin/bash -c "apt-get update && apt-get install -y unzip && unzip /data/archive.zip -d /data/extracted"

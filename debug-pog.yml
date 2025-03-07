@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pvc-inspector
+spec:
+  containers:
+  - name: pvc-inspector
+    image: busybox
+    command: ["sleep", "3600"]  # Pod will stay alive for 1 hour
+    volumeMounts:
+    - name: pvc-storage
+      mountPath: /data          # PVC will be mounted at /data
+  volumes:
+  - name: pvc-storage
+    persistentVolumeClaim:
+      claimName: brats-data # Replace with your actual PVC name
+  restartPolicy: Never
