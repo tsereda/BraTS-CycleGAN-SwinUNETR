@@ -38,7 +38,7 @@ def test_gpu_cuda():
     # 3. Perform a Simple Operation on GPU and CPU and Time it
     print("\n--- Performance Comparison (GPU vs CPU) ---")
     size = 2000
-    iterations = 2
+    iterations = 4
 
     # GPU Performance
     gpu_tensor = torch.randn(size, size).to(device)
