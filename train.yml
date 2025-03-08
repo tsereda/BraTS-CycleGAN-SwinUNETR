@@ -1,0 +1,148 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: brats-seg
+spec:
+  template:
+    spec:
+      securityContext:
+          runAsUser: 1000
+          runAsGroup: 100
+          fsGroup: 100
+      containers:
+      - name: demo
+        image: gitlab-registry.nrp-nautilus.io/prp/jupyter-stack/prp
+        command:
+        - "bash"
+        - "-c"
+        args:
+        - |
+          # Print user info for debugging
+          echo "Running as user: $(whoami), UID: $(id -u), GID: $(id -g)"
+          
+          # Set conda to use the persistent volume for environments
+          mkdir -p /conda-envs
+          chown -R $(id -u):$(id -g) /conda-envs || echo "Warning: Could not change ownership of /conda-envs"
+          
+          echo "Configuring conda to use /conda-envs directory..."
+          echo "envs_dirs:
+            - /conda-envs
+          " > ~/.condarc
+          
+          # Show conda config for verification
+          echo "Conda configuration:"
+          cat ~/.condarc
+          conda config --show envs_dirs
+          
+          # Check if environment already exists
+          if [ -d "/conda-envs/BraTS" ]; then
+            echo "Conda environment found at /conda-envs/BraTS"
+            # Just update it if needed
+            conda env update -f /opt/repo/BraTS-CycleGAN-SwinUNETR/environment.yml || { echo "Failed to update environment"; exit 1; }
+          else
+            echo "Creating new conda environment at /conda-envs/BraTS..."
+            # Explicitly specify the path to ensure it goes to the right place
+            conda env create -f /opt/repo/BraTS-CycleGAN-SwinUNETR/environment.yml -p /conda-envs/BraTS || { echo "Failed to create environment"; exit 1; }
+          fi
+          
+          # List environments to verify
+          echo "Available conda environments:"
+          conda env list
+          
+          # Make sure the BraTS environment exists
+          if [ ! -d "/conda-envs/BraTS" ]; then
+            echo "ERROR: BraTS environment not found after creation attempt!"
+            exit 1
+          fi
+          
+          # Activate the environment
+          eval "$(conda shell.bash hook)"
+          echo "Activating BraTS environment..."
+          conda activate /conda-envs/BraTS || { echo "Failed to activate environment"; exit 1; }
+          echo "Active environment: $CONDA_DEFAULT_ENV"
+          
+          # Fix the split-folders package issue
+          echo "Checking if splitfolders is importable..."
+          if ! python -c "import splitfolders" 2>/dev/null; then
+            echo "Installing split-folders with pip..."
+            pip install split-folders
+            
+            # Double-check installation
+            if ! python -c "import splitfolders"; then
+              echo "ERROR: Still cannot import splitfolders. Diagnosing..."
+              pip list | grep -i split
+              conda list | grep -i split
+              python -c "import sys; print(sys.path)"
+              exit 1
+            fi
+          fi
+          
+          # Run the script
+          echo "Running preprocessing script..."
+          python /opt/repo/BraTS-CycleGAN-SwinUNETR/data_preprocessing.py
+        volumeMounts:
+        - name: git-repo
+          mountPath: /opt/repo
+        - name: brats-data-volume
+          mountPath: /data
+        - name: conda-environments
+          mountPath: /conda-envs
+        resources:
+          limits:
+            memory: 4915Mi
+            cpu: "1.2"
+            nvidia.com/gpu: "1"
+          requests:
+            memory: 4096Mi
+            cpu: "1"
+            nvidia.com/gpu: "1"
+      initContainers:
+      - name: volume-permissions
+        image: busybox
+        command: 
+        - sh
+        - -c
+        - |
+          mkdir -p /conda-envs
+          chmod -R 777 /conda-envs
+          echo "Permissions set for /conda-envs"
+        volumeMounts:
+        - name: conda-environments
+          mountPath: /conda-envs
+        securityContext:
+          runAsUser: 0
+        resources:
+          limits:
+            memory: 307Mi
+            cpu: 240m
+          requests:
+            memory: 256Mi
+            cpu: 200m
+      - name: init-clone-repo
+        image: alpine/git
+        args:
+          - clone
+          - --single-branch
+          - https://gitlab.nrp-nautilus.io/timothy.sereda/BraTS-CycleGAN-SwinUNETR
+          - /opt/repo/BraTS-CycleGAN-SwinUNETR
+        volumeMounts:
+          - name: git-repo
+            mountPath: /opt/repo
+        resources:
+          limits:
+            memory: 307Mi
+            cpu: 240m
+          requests:
+            memory: 256Mi
+            cpu: 200m
+      volumes:
+      - name: git-repo
+        emptyDir: {}
+      - name: brats-data-volume
+        persistentVolumeClaim:
+          claimName: brats-data
+      - name: conda-environments
+        persistentVolumeClaim:
+          claimName: conda-environments
+      restartPolicy: Never
+  backoffLimit: 5

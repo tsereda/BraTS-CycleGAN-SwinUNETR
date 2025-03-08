@@ -1,39 +1,43 @@
-# Start with the base PRP image
-FROM gitlab-registry.nrp-nautilus.io/prp/jupyter-stack/prp
+# Start with a minimal Python base image
+FROM python:3.9-slim
 
-# Set the working directory
-WORKDIR /opt
+# Set working directory
+WORKDIR /opt/app
 
-# Install git
-USER root
-RUN apt-get update && apt-get install -y git && apt-get clean && rm -rf /var/lib/apt/lists/*
+# Install system dependencies (minimized)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    wget \
+    ca-certificates \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Miniconda instead of full Anaconda
+RUN wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O /tmp/miniconda.sh \
+    && bash /tmp/miniconda.sh -b -p /opt/conda \
+    && rm /tmp/miniconda.sh
+
+# Add conda to path
+ENV PATH="/opt/conda/bin:${PATH}"
 
 # Clone the repository
-RUN git clone --depth=1 https://gitlab.nrp-nautilus.io/timothy.sereda/BraTS-CycleGAN-SwinUNETR /opt/BraTS-CycleGAN-SwinUNETR
+RUN git clone https://github.com/tsereda/BraTS-CycleGAN-SwinUNETR /opt/app
 
-# Switch back to the jovyan user
-USER jovyan
+# Create conda environment from the cloned repo's environment file
+RUN conda env create -f environment.yml
 
-# Create and activate conda environment from the repo's environment file
-# Creating it at the system level means we don't need a persistent volume for conda environments
-RUN conda env create -f /opt/BraTS-CycleGAN-SwinUNETR/environment.yml -n BraTS && \
-    conda clean -afy
+# Make RUN commands use the conda environment
+SHELL ["conda", "run", "-n", "BraTS", "/bin/bash", "-c"]
 
-# Add the conda initialization to .bashrc
-RUN echo 'eval "$(conda shell.bash hook)"' >> ~/.bashrc && \
-    echo 'conda activate BraTS' >> ~/.bashrc
+# Install additional Python dependencies
+RUN pip install split-folders
 
-# Fix the split-folders package issue
-RUN conda activate BraTS && pip install split-folders
+# Clean conda to reduce image size
+RUN conda clean -afy && \
+    find /opt/conda/ -type f -name '*.a' -delete && \
+    find /opt/conda/ -type f -name '*.js.map' -delete && \
+    find /opt/conda/ -type f -name '*.pyc' -delete && \
+    find /opt/conda/ -type f -name '*.c' -delete
 
-# Create data directory for the BraTS dataset
-RUN mkdir -p /data
-
-# Copy your dataset in - comment this out if you plan to mount the dataset instead
-# COPY ./brats_dataset/ /data/
-
-# Set the entrypoint to use the conda environment
-ENTRYPOINT ["/bin/bash", "-c", "eval \"$(conda shell.bash hook)\" && conda activate BraTS && exec \"$@\"", "--"]
-
-# Default command (can be overridden)
-CMD ["python", "/opt/BraTS-CycleGAN-SwinUNETR/data_preprocessing.py"]
+# Set default command
+CMD ["conda", "run", "--no-capture-output", "-n", "BraTS", "python", "segmentation/train.py"]

@@ -2,7 +2,6 @@ import os
 import numpy as np
 import nibabel as nib
 from pathlib import Path
-from sklearn.preprocessing import MinMaxScaler
 import json
 import glob
 import shutil
@@ -149,7 +148,6 @@ def preprocess_brats2020(input_path: str, output_path: str, num_workers: int = N
     # Determine directory pattern based on dataset type
     dir_pattern = f'BraTS20_{dataset_type.capitalize()}_*' if dataset_type.lower() in ['training', 'validation'] else 'BraTS20_*'
     
-    # Get all patient directories
     patient_dirs = sorted(glob.glob(f'{input_path}/{dir_pattern}'))
     
     # If no directories found with this pattern, try searching subdirectories
@@ -158,6 +156,10 @@ def preprocess_brats2020(input_path: str, output_path: str, num_workers: int = N
         patient_dirs = sorted(glob.glob(f'{input_path}/**/{dir_pattern}', recursive=True))
     
     patient_dirs = [d for d in patient_dirs if os.path.isdir(d)]
+    
+    if not patient_dirs:
+        print(f"ERROR: No patient directories found matching pattern '{dir_pattern}'")
+        return {"valid_cases": [], "skipped_cases": []}
     
     print(f"Found {len(patient_dirs)} patient directories")
     
@@ -208,6 +210,10 @@ def preprocess_brats2020(input_path: str, output_path: str, num_workers: int = N
                     print(f"Warning: Missing files for {patient_id}. Skipping.")
     
     print(f"Found {len(case_data)} complete cases out of {len(patient_dirs)} directories")
+    
+    if len(case_data) == 0:
+        print("ERROR: No valid cases found for processing!")
+        return {"valid_cases": [], "skipped_cases": []}
     
     processed_files = {'valid_cases': [], 'skipped_cases': []}
     
@@ -360,8 +366,6 @@ def create_complete_dataset(
     Complete pipeline to prepare BraTS2020 dataset for both segmentation and CycleGAN training
     
     Args:
-        training_data_path (str): Path to raw BraTS2020 training dataset
-        validation_data_path (str): Path to raw BraTS2020 validation dataset
         processed_training_path (str): Path to save preprocessed training data
         processed_validation_path (str): Path to save preprocessed validation data
         split_data_path (str): Path to save split training data
@@ -369,63 +373,93 @@ def create_complete_dataset(
         train_ratio (float): Ratio of training data for splitting
         num_workers (int): Number of parallel workers
     """
-    # Step 1: Preprocess the training dataset (with masks)
-    preprocess_brats2020(
-        training_data_path, 
-        processed_training_path, 
-        num_workers,
-        dataset_type="training",
-        has_mask=True
-    )
+    print(f"=== STARTING COMPLETE DATASET PREPARATION ===")
     
-    # Step 2: Preprocess the validation dataset (with or without masks)
-    # First, check if any validation directories exist by doing a recursive search
-    print(f"Searching for validation directories in {validation_data_path}...")
-    validation_dirs = glob.glob(f'{validation_data_path}/**/BraTS20_Validation_*', recursive=True)
+    # Step 1: Preprocess the training dataset (with masks)
+    print("\n=== STEP 1: PREPROCESSING TRAINING DATA ===")
+    # Search for training directories
+    training_dirs = sorted(glob.glob(f'{training_data_path}/BraTS20_Training_*'))
+    if training_dirs:
+        print(f"Found {len(training_dirs)} training directories")
+        training_processed = preprocess_brats2020(
+            training_data_path, 
+            processed_training_path, 
+            num_workers,
+            dataset_type="training",
+            has_mask=True
+        )
+        print(f"Training data processed: {len(training_processed['valid_cases'])} valid cases")
+    else:
+        print(f"WARNING: No training directories found. Skipping training data preprocessing.")
+    
+    # Step 2: Preprocess the validation dataset
+    print("\n=== STEP 2: PREPROCESSING VALIDATION DATA ===")
+    # Search for validation directories
+    validation_dirs = sorted(glob.glob(f'{validation_data_path}/BraTS20_Validation_*'))
     
     if validation_dirs:
         print(f"Found {len(validation_dirs)} validation directories")
-        # Use the first directory to check for mask presence
+        # Check for the presence of mask files in the first validation directory
         first_dir = validation_dirs[0]
         dir_basename = os.path.basename(first_dir)
-        
-        # Check for both .nii.gz and .nii mask files
         mask_path_gz = os.path.join(first_dir, f"{dir_basename}_seg.nii.gz")
         mask_path = os.path.join(first_dir, f"{dir_basename}_seg.nii")
         
         has_mask_validation = os.path.exists(mask_path_gz) or os.path.exists(mask_path)
         print(f"Validation data has masks: {has_mask_validation}")
+        upernetona100
+        
+        validation_processed = preprocess_brats2020(
+            validation_data_path, 
+            processed_validation_path, 
+            num_workers,
+            dataset_type="validation",
+            has_mask=has_mask_validation
+        )
+        print(f"Validation data processed: {len(validation_processed['valid_cases'])} valid cases")
     else:
-        print(f"No validation directories found. Skipping validation preprocessing.")
-        has_mask_validation = False
-    
-    preprocess_brats2020(
-        validation_data_path, 
-        processed_validation_path, 
-        num_workers,
-        dataset_type="validation",
-        has_mask=has_mask_validation
-    )
+        print(f"WARNING: No validation directories found. Skipping validation data preprocessing.")
     
     # Step 3: Split training data into train/val
-    split_dataset(processed_training_path, split_data_path, train_ratio)
+    print("\n=== STEP 3: SPLITTING TRAINING DATA ===")
+    # Check if there's processed training data to split
+    train_images = len(glob.glob(f"{processed_training_path}/images/*.npy"))
+    train_masks = len(glob.glob(f"{processed_training_path}/masks/*.npy"))
+    
+    if train_images > 0 and train_masks > 0:
+        print(f"Found {train_images} training images and {train_masks} masks to split")
+        split_dataset(processed_training_path, split_data_path, train_ratio)
+    else:
+        print(f"WARNING: No training data found to split. Skipping split step.")
     
     # Step 4: Create CycleGAN dataset (75% training + validation)
-    create_cyclegan_dataset(
-        split_data_path,
-        processed_validation_path,
-        cyclegan_data_path
-    )
+    print("\n=== STEP 4: CREATING CYCLEGAN DATASET ===")
+    # Check if there's training split and validation data
+    train_split_images = len(glob.glob(f"{split_data_path}/train/images/*.npy")) if os.path.exists(f"{split_data_path}/train/images") else 0
+    val_images = len(glob.glob(f"{processed_validation_path}/images/*.npy"))
     
-    print(f"Complete dataset preparation finished:")
+    if train_split_images > 0 or val_images > 0:
+        print(f"Found {train_split_images} training split images and {val_images} validation images")
+        create_cyclegan_dataset(
+            split_data_path,
+            processed_validation_path,
+            cyclegan_data_path
+        )
+    else:
+        print(f"WARNING: No data found for CycleGAN dataset. Skipping CycleGAN dataset creation.")
+    
+    print(f"\n=== COMPLETE DATASET PREPARATION FINISHED ===")
+
     print(f"1. Segmentation training data: {split_data_path}")
     print(f"2. CycleGAN training data: {cyclegan_data_path}")
 
 
 if __name__ == "__main__":
-    # Example usage with corrected paths for both training and validation data
-    RAW_TRAINING_PATH = "brats20-dataset/BraTS2020_TrainingData/MICCAI_BraTS2020_TrainingData"
-    RAW_VALIDATION_PATH = "brats20-dataset/BraTS2020_ValidationData/MICCAI_BraTS2020_ValidationData"
+
+    # Example usage with the actual path structure
+    RAW_TRAINING_PATH = "brats20-dataset"
+    RAW_VALIDATION_PATH = "brats20-dataset"
+
     PROCESSED_TRAINING_PATH = "processed_data/brats128_training"
     PROCESSED_VALIDATION_PATH = "processed_data/brats128_validation"
     SPLIT_DATA_PATH = "processed_data/brats128_split"
