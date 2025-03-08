@@ -46,6 +46,8 @@ spec:
           eval "$(conda shell.bash hook)" # Still using conda shell hook for environment setup
           conda activate /conda-envs/BraTS || { echo "Failed to activate environment"; exit 1; }
 
+          python ${REPO_PATH}/gpucheck.py
+
           # Run the training script from the /data directory to ensure correct path resolution
           python ${REPO_PATH}/segmentation/train.py
 
