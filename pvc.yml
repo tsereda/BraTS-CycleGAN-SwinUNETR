@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: conda-environments1 # Name of the PersistentVolumeClaim - must match volume claimName in Job
+spec:
+  accessModes:
+    - ReadWriteOnce #  Or ReadWriteMany if you need to share it across multiple pods concurrently
+  resources:
+    requests:
+      storage: 50Gi

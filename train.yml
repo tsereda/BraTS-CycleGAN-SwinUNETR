@@ -29,18 +29,25 @@ spec:
             - /conda-envs
           " > ~/.condarc
 
-          # --- Mamba Environment Management ---
-          if [ -d "/conda-envs/BraTS" ]; then
-            echo "Updating existing BraTS environment using mamba..."
-            mamba env update -vvv -f ${REPO_PATH}/environment.yml || { echo "Failed to update environment"; exit 1; }
-          else
-            echo "Creating new BraTS environment using mamba..."
-            mamba env create -f ${REPO_PATH}/environment.yml -p /conda-envs/BraTS || { echo "Failed to create environment"; exit 1; }
-          fi
+          +         # --- Git Repository Update ---
+          echo "Updating Git repository..."
+          cd ${REPO_PATH} # Navigate to the repository directory
+          git pull origin main || { echo "Failed to update git repository"; exit 1; } # Pull changes from 'origin main'
+          echo "Git repository updated."
+
+          # # --- Mamba Environment Management ---
+          # if [ -d "/conda-envs/BraTS" ]; then
+          #   echo "Updating existing BraTS environment using mamba..."
+          #   mamba env update -vvv -f ${REPO_PATH}/environment.yml || { echo "Failed to update environment"; exit 1; }
+          # else
+          #   echo "Creating new BraTS environment using mamba..."
+          #   mamba env create -f ${REPO_PATH}/environment.yml -p /conda-envs/BraTS || { echo "Failed to create environment"; exit 1; }
+          # fi
 
           # --- Activate Conda Environment and Run Script ---
           eval "$(conda shell.bash hook)" # Still using conda shell hook for environment setup
-          conda activate /conda-envs/BraTS || { echo "Failed to activate environment"; exit 1; } # Or try 'mamba activate /conda-envs/BraTS'
+
+          conda activate /conda-envs/BraTS || { echo "Failed to activate environment"; exit 1; }
 
           python ${REPO_PATH}/segmentation/train.py # Run the training script
 
@@ -49,7 +56,7 @@ spec:
           mountPath: /opt/repo # Mount for the git repository code
         - name: brats-data-volume
           mountPath: /data      # Mount for the brats data
-        - name: conda-environments
+        - name: conda-environments1
           mountPath: /conda-envs # Mount for conda environments
 
         resources: # Resource requests and limits for the container
@@ -67,7 +74,7 @@ spec:
         image: busybox
         command: ["sh", "-c", "mkdir -p /conda-envs && chown -R 1000:100 /conda-envs && chmod -R 755 /conda-envs && echo 'Permissions set for /conda-envs'"]
         volumeMounts:
-        - name: conda-environments
+        - name: conda-environments1
           mountPath: /conda-envs
         securityContext: # Security context for permission setting - needs root to chown/chmod
           runAsUser: 0
@@ -103,9 +110,9 @@ spec:
       - name: brats-data-volume # Volume for brats data - PersistentVolumeClaim for persistent data
         persistentVolumeClaim:
           claimName: brats-data
-      - name: conda-environments # Volume for conda environments - PersistentVolumeClaim for persistent environments
+      - name: conda-environments1 # Volume for conda environments - PersistentVolumeClaim for persistent environments
         persistentVolumeClaim:
-          claimName: conda-environments
+          claimName: conda-environments1
 
       restartPolicy: Never # Job should not restart containers on failure
 
