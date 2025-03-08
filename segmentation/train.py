@@ -8,8 +8,8 @@ import time
 from tqdm import tqdm
 
 # Import the fixed loss and model
-from fixed_losses import CombinedLoss
-from improved_swin_unetr import ImprovedSwinUNETR
+from losses import CombinedLoss
+from swin_unetr import ImprovedSwinUNETR
 from dataset import get_data_loaders, BraTSDataset
 
 
