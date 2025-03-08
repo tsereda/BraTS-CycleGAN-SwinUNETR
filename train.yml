@@ -62,11 +62,11 @@ spec:
         resources: # Resource requests and limits for the container
           limits:
             memory: 36Gi
-            cpu: "6"
+            cpu: "12"
             nvidia.com/a100: "2"
           requests:
             memory: 30Gi
-            cpu: "5"
+            cpu: "10"
             nvidia.com/a100: "2"
 
       initContainers: # Init containers run before the main container
