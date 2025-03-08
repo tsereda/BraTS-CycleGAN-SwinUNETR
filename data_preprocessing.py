@@ -148,7 +148,6 @@ def preprocess_brats2020(input_path: str, output_path: str, num_workers: int = N
     # Determine directory pattern based on dataset type
     dir_pattern = f'BraTS20_{dataset_type.capitalize()}_*' if dataset_type.lower() in ['training', 'validation'] else 'BraTS20_*'
     
-    # Get all patient directories - search directly in the base directory
     patient_dirs = sorted(glob.glob(f'{input_path}/{dir_pattern}'))
     
     # If no directories found with this pattern, try searching subdirectories
@@ -367,8 +366,6 @@ def create_complete_dataset(
     Complete pipeline to prepare BraTS2020 dataset for both segmentation and CycleGAN training
     
     Args:
-        training_data_path (str): Path to raw BraTS2020 dataset
-        validation_data_path (str): Path to raw BraTS2020 dataset
         processed_training_path (str): Path to save preprocessed training data
         processed_validation_path (str): Path to save preprocessed validation data
         split_data_path (str): Path to save split training data
@@ -410,6 +407,7 @@ def create_complete_dataset(
         
         has_mask_validation = os.path.exists(mask_path_gz) or os.path.exists(mask_path)
         print(f"Validation data has masks: {has_mask_validation}")
+        upernetona100
         
         validation_processed = preprocess_brats2020(
             validation_data_path, 
@@ -451,14 +449,17 @@ def create_complete_dataset(
         print(f"WARNING: No data found for CycleGAN dataset. Skipping CycleGAN dataset creation.")
     
     print(f"\n=== COMPLETE DATASET PREPARATION FINISHED ===")
+
     print(f"1. Segmentation training data: {split_data_path}")
     print(f"2. CycleGAN training data: {cyclegan_data_path}")
 
 
 if __name__ == "__main__":
+
     # Example usage with the actual path structure
     RAW_TRAINING_PATH = "brats20-dataset"
     RAW_VALIDATION_PATH = "brats20-dataset"
+
     PROCESSED_TRAINING_PATH = "processed_data/brats128_training"
     PROCESSED_VALIDATION_PATH = "processed_data/brats128_validation"
     SPLIT_DATA_PATH = "processed_data/brats128_split"

@@ -3,3 +3,4 @@ logs/
 processed_data/
 *.pyc
 brats20-dataset/
+validation_visualizations/
