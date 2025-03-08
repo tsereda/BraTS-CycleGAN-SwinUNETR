@@ -120,10 +120,13 @@ class CombinedLoss(nn.Module):
         self.focal_weight = focal_weight
         self.dice_loss = DiceLoss(weight=class_weights)
         self.focal_loss = FocalLoss(weights=class_weights)
-        
+
     def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         dice = self.dice_loss(logits, targets)
         focal = self.focal_loss(logits, targets)
+        
+        # Print values for debugging
+        print(f"Dice loss: {dice.item()}, Focal loss: {focal.item()}")
         
         # Handle any NaN values that might occur
         if torch.isnan(dice):
@@ -136,7 +139,10 @@ class CombinedLoss(nn.Module):
             
         total_loss = self.dice_weight * dice + self.focal_weight * focal
         
-        # Ensure the total loss is not negative
-        total_loss = torch.clamp(total_loss, min=0.0)
+        # Print before clamping
+        print(f"Total loss before clamping: {total_loss.item()}")
+        
+        # Temporarily comment out clamping to see if it's causing issues
+        # total_loss = torch.clamp(total_loss, min=0.0)
         
         return total_loss

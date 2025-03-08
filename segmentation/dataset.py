@@ -109,7 +109,6 @@ class BraTSDataset(Dataset):
         return len(self.img_files)
     
     def __getitem__(self, idx):
-        """Get a sample from the dataset with improved error handling"""
         try:
             # Load image and mask
             img_path = self.img_files[idx]
@@ -121,6 +120,12 @@ class BraTSDataset(Dataset):
             # Load data
             img = np.load(img_path)
             mask = np.load(mask_path)
+            
+            # Debug information about data
+            print(f"Image shape: {img.shape}, range: {img.min():.4f} to {img.max():.4f}")
+            unique_mask_values = np.unique(mask)
+            print(f"Mask shape: {mask.shape}, unique values: {unique_mask_values}")
+        
             
             # Extract just the integer label from the mask (if one-hot encoded)
             if len(mask.shape) == 4 and mask.shape[3] in [3, 4]:  # One-hot encoded mask

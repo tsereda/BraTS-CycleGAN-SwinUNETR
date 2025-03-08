@@ -256,17 +256,28 @@ def train_model(
             for batch_idx, (images, targets) in enumerate(train_loader):
                 images, targets = images.to(device), targets.to(device)
                 
-                # Forward pass with mixed precision if enabled
                 if use_mixed_precision:
                     with torch.amp.autocast('cuda'):
                         outputs = model(images)
-                        loss = loss_fn(outputs, targets) / gradient_accumulation_steps
+                        raw_loss = loss_fn(outputs, targets)
+                        print(f"Raw loss: {raw_loss.item()}, min: {outputs.min().item()}, max: {outputs.max().item()}")
+                        loss = raw_loss / gradient_accumulation_steps
                     
                     # Backward pass with scaler
                     scaler.scale(loss).backward()
                     
                     # Update weights if we've accumulated enough gradients
                     if (batch_idx + 1) % gradient_accumulation_steps == 0:
+                        total_norm = 0
+                        for p in model.parameters():
+                            if p.grad is not None:
+                                param_norm = p.grad.data.norm(2)
+                                total_norm += param_norm.item() ** 2
+                        total_norm = total_norm ** 0.5
+                        print(f"Gradient norm: {total_norm:.6f}")
+                        
+                        # Gradient clipping
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                         # Gradient clipping
                         scaler.unscale_(optimizer)
                         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -476,7 +487,7 @@ if __name__ == "__main__":
     config = {
         'data_path': "processed_data/brats128_split/",
         'output_path': "/tmp/output/",
-        'batch_size': 1,
+        'batch_size': 2,
         'num_workers': 0,
         'epochs': 100,
         'learning_rate': 5e-4,
