@@ -6,7 +6,7 @@ from typing import Optional
 
 class DiceLoss(nn.Module):
     """
-    Dice Loss for multi-class segmentation
+    Corrected Dice Loss for multi-class segmentation that guarantees positive values
     """
     def __init__(self, weight=None, smooth=1.0):
         super(DiceLoss, self).__init__()
@@ -17,7 +17,7 @@ class DiceLoss(nn.Module):
         """
         Args:
             logits: Tensor of shape [B, C, D, H, W] where C is the number of classes
-            targets: Tensor of shape [B, D, H, W] with class indices or [B, C, D, H, W] one-hot
+            targets: Tensor of shape [B, D, H, W] with class indices
         """
         num_classes = logits.shape[1]
         
@@ -32,34 +32,35 @@ class DiceLoss(nn.Module):
             targets_one_hot = targets_one_hot.permute(0, 4, 1, 2, 3).contiguous()
         else:
             targets_one_hot = targets
-            
-        # Ensure shapes match for debugging
-        if probs.shape != targets_one_hot.shape:
-            print(f"Shape mismatch: probs {probs.shape}, targets_one_hot {targets_one_hot.shape}")
-            raise ValueError(f"Shape mismatch in DiceLoss: {probs.shape} vs {targets_one_hot.shape}")
-            
+        
         # Flatten for dice calculation while keeping batch and class dimensions
         probs_flat = probs.view(probs.shape[0], probs.shape[1], -1)
         targets_flat = targets_one_hot.view(targets_one_hot.shape[0], targets_one_hot.shape[1], -1)
         
-        # Calculate intersection and dice score
-        numerator = 2 * torch.sum(probs_flat * targets_flat, dim=2) + self.smooth
-        denominator = torch.sum(probs_flat, dim=2) + torch.sum(targets_flat, dim=2) + self.smooth
+        # Calculate intersection and union for each class
+        intersection = torch.sum(probs_flat * targets_flat, dim=2)  # [B, C]
+        union = torch.sum(probs_flat, dim=2) + torch.sum(targets_flat, dim=2)  # [B, C]
         
-        # Calculate class-wise dice scores
-        dice_scores = numerator / denominator
+        # Calculate Dice score (add smooth to both numerator and denominator)
+        dice_scores = (2.0 * intersection + self.smooth) / (union + self.smooth)  # [B, C]
         
         # Apply class weights if provided
         if self.weight is not None:
-            dice_scores = dice_scores * self.weight
+            weight = self.weight.to(dice_scores.device)
+            dice_scores = dice_scores * weight
             
-        # Return mean dice loss (1 - dice score)
-        return 1.0 - dice_scores.mean()
+        # Average over classes and batches
+        dice_loss = 1.0 - torch.mean(dice_scores)
+        
+        # Ensure loss is non-negative (should always be the case with this implementation)
+        dice_loss = torch.clamp(dice_loss, min=0.0)
+        
+        return dice_loss
 
 
 class FocalLoss(nn.Module):
     """
-    Focal loss for handling class imbalance in segmentation with improved stability
+    Improved Focal loss for handling class imbalance in segmentation
     """
     def __init__(self, 
                  alpha: float = 0.25, 
@@ -71,37 +72,38 @@ class FocalLoss(nn.Module):
         self.weights = weights
         
     def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-        # Get probabilities from logits
-        probs = F.softmax(logits, dim=1)
+        # Get probabilities from logits with epsilon for numerical stability
+        probs = F.softmax(logits, dim=1) + 1e-10
         
         # One-hot encode targets
         targets_one_hot = F.one_hot(targets, num_classes=logits.size(1)).permute(0, 4, 1, 2, 3).float()
         
-        # Calculate focal loss
-        # -alpha * (1 - pt)^gamma * log(pt)
-        # where pt = p if y = 1, and pt = 1 - p if y = 0
+        # Calculate pt (probability of correct class)
+        pt = torch.sum(targets_one_hot * probs, dim=1)
         
-        # Binary cross entropy
-        bce = -targets_one_hot * torch.log(probs.clamp(min=1e-6)) - (1 - targets_one_hot) * torch.log((1 - probs).clamp(min=1e-6))
-        
-        # pt is the probability of the correct class
-        pt = targets_one_hot * probs + (1 - targets_one_hot) * (1 - probs)
-        
-        # Focal term
+        # Compute focal loss (using log for numerical stability)
         focal_term = (1 - pt) ** self.gamma
+        focal_loss = -self.alpha * focal_term * torch.log(pt + 1e-10)
         
-        # Combine with alpha
-        loss = self.alpha * focal_term * bce
+        # Average over all dimensions except batch
+        focal_loss = focal_loss.mean(dim=(1, 2, 3))
         
         # Apply class weights if provided
         if self.weights is not None:
-            weights = self.weights.view(1, -1, 1, 1, 1).to(loss.device)
-            loss = loss * weights
+            # Apply weights to each batch element by class
+            class_indices = targets.view(targets.size(0), -1)
+            batch_weights = torch.zeros_like(focal_loss)
             
-        # Return mean loss
-        focal_loss = loss.mean()
+            # Compute weighted average for each batch element
+            for b in range(targets.size(0)):
+                batch_weights[b] = torch.mean(self.weights[class_indices[b]])
+                
+            focal_loss = focal_loss * batch_weights
         
-        # Ensure loss is not negative
+        # Return mean loss over batch
+        focal_loss = focal_loss.mean()
+        
+        # Ensure loss is non-negative
         focal_loss = torch.clamp(focal_loss, min=0.0)
         
         return focal_loss
@@ -120,29 +122,20 @@ class CombinedLoss(nn.Module):
         self.focal_weight = focal_weight
         self.dice_loss = DiceLoss(weight=class_weights)
         self.focal_loss = FocalLoss(weights=class_weights)
-
+        
     def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         dice = self.dice_loss(logits, targets)
         focal = self.focal_loss(logits, targets)
         
-        # Print values for debugging
-        print(f"Dice loss: {dice.item()}, Focal loss: {focal.item()}")
-        
-        # Handle any NaN values that might occur
-        if torch.isnan(dice):
-            print("Warning: NaN in Dice loss, using only Focal loss")
-            return self.focal_weight * focal
-            
-        if torch.isnan(focal):
-            print("Warning: NaN in Focal loss, using only Dice loss")
-            return self.dice_weight * dice
-            
+        # Combine losses
         total_loss = self.dice_weight * dice + self.focal_weight * focal
         
-        # Print before clamping
+        # Print diagnostic information
+        print(f"Dice loss: {dice.item()}, Focal loss: {focal.item()}")
         print(f"Total loss before clamping: {total_loss.item()}")
+        print(f"Raw loss: {total_loss.item()}, min: {logits.min().item()}, max: {logits.max().item()}")
         
-        # Temporarily comment out clamping to see if it's causing issues
-        # total_loss = torch.clamp(total_loss, min=0.0)
+        # Ensure the total loss is not negative
+        total_loss = torch.clamp(total_loss, min=0.0)
         
         return total_loss

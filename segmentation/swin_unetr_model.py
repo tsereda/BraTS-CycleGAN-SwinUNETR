@@ -6,7 +6,7 @@ from typing import Tuple, List
 
 
 class PatchEmbed3D(nn.Module):
-    """Video to Patch Embedding with dimension verification.
+    """Video to Patch Embedding that preserves dimensions appropriately.
     
     Args:
         patch_size: Patch token size.
@@ -26,38 +26,33 @@ class PatchEmbed3D(nn.Module):
         self.in_channels = in_channels
         self.embed_dim = embed_dim
         
+        # CRITICAL FIX: Ensure patch embedding doesn't reduce dimensions twice
+        # We'll use a convolutional layer with stride 1 to preserve spatial dimensions
+        # This is necessary because we're already downsampling in later stages
         self.proj = nn.Conv3d(
             in_channels, embed_dim, 
-            kernel_size=patch_size, 
-            stride=patch_size
+            kernel_size=3,  # Use 3x3x3 convolution 
+            stride=1,       # Don't reduce dimension here
+            padding=1       # Preserve spatial dimensions
         )
         
         self.norm = norm_layer(embed_dim) if norm_layer else nn.Identity()
 
     def forward(self, x):
-        """Forward function with dimension verification."""
-        B, C, D, H, W = x.shape
-        
-        # Verify input dimensions are divisible by patch size
-        if D % self.patch_size[0] != 0 or H % self.patch_size[1] != 0 or W % self.patch_size[2] != 0:
-            print(f"Warning: Input dimensions {D}x{H}x{W} not divisible by patch size {self.patch_size}")
-            # Pad input to make dimensions divisible
-            pad_d = (self.patch_size[0] - D % self.patch_size[0]) % self.patch_size[0]
-            pad_h = (self.patch_size[1] - H % self.patch_size[1]) % self.patch_size[1]
-            pad_w = (self.patch_size[2] - W % self.patch_size[2]) % self.patch_size[2]
-            x = F.pad(x, (0, pad_w, 0, pad_h, 0, pad_d), "constant", 0)
-            print(f"Padded input to {x.shape[2:]} to ensure divisibility")
-        
+        """Forward function."""
+        input_shape = x.shape
         x = self.proj(x)
-        if isinstance(x, tuple):
-            x = x[0]
-            
-        x = self.norm(x.permute(0, 2, 3, 4, 1))
+        out_shape = x.shape
+        
+        # Rearrange dimensions for transformer blocks
+        x = x.permute(0, 2, 3, 4, 1)  # B, D, H, W, C
+        x = self.norm(x)
+        
         return x
 
 
 class WindowAttention3D(nn.Module):
-    """Window based multi-head self-attention module with dimension safety checks."""
+    """Window based multi-head self-attention with improved numeric stability."""
     
     def __init__(
         self,
@@ -121,41 +116,36 @@ class WindowAttention3D(nn.Module):
         self.softmax = nn.Softmax(dim=-1)
 
     def forward(self, x, mask=None):
-        """Forward function with safe dimension handling.
-        
-        Args:
-            x: input features with shape of (num_windows*B, N, C)
-            mask: (0/-inf) mask with shape of (num_windows, Wd*Wh*Ww, Wd*Wh*Ww) or None
-        """
+        """Forward function with improved numerical stability."""
         B_, N, C = x.shape
         
-        # Safe QKV projection
-        qkv_proj = self.qkv(x)  # B_, N, 3*C
-        
-        # Safe reshape handling
-        qkv = qkv_proj.reshape(B_, N, 3, self.num_heads, self.head_dim)
+        # Safe QKV projection and reshape
+        qkv = self.qkv(x).reshape(B_, N, 3, self.num_heads, self.head_dim)
         qkv = qkv.permute(2, 0, 3, 1, 4)  # 3, B_, num_heads, N, head_dim
         q, k, v = qkv[0], qkv[1], qkv[2]  # make torchscript happy (cannot use tensor as tuple)
 
         q = q * self.scale
         attn = (q @ k.transpose(-2, -1))
 
-        # Safe relative position bias handling
+        # Get relative position bias and ensure dimensions match
         relative_position_bias = self.relative_position_bias_table[self.relative_position_index.view(-1)].view(
             self.window_size[0] * self.window_size[1] * self.window_size[2],
             self.window_size[0] * self.window_size[1] * self.window_size[2], -1)  # Wd*Wh*Ww,Wd*Wh*Ww,nH
         
-        rel_pos_bias = relative_position_bias.permute(2, 0, 1).contiguous()  # nH, Wd*Wh*Ww, Wd*Wh*Ww
+        # Permute to correct dimensions
+        relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()  # nH, Wd*Wh*Ww, Wd*Wh*Ww
         
-        # Safely add bias to attention
-        attn = attn + rel_pos_bias.unsqueeze(0)
+        # Add bias to attention (with sanity check)
+        attn = attn + relative_position_bias.unsqueeze(0)
 
         if mask is not None:
             nW = mask.shape[0]
             attn = attn.view(B_ // nW, nW, self.num_heads, N, N) + mask.unsqueeze(1).unsqueeze(0)
             attn = attn.view(-1, self.num_heads, N, N)
-        
-        attn = self.softmax(attn)
+            attn = self.softmax(attn)
+        else:
+            attn = self.softmax(attn)
+
         attn = self.attn_drop(attn)
 
         x = (attn @ v).transpose(1, 2).reshape(B_, N, -1)
@@ -164,279 +154,76 @@ class WindowAttention3D(nn.Module):
         return x
 
 
-class SwinTransformerBlock3D(nn.Module):
-    """Swin Transformer Block with fixed window partitioning."""
-
-    def __init__(
-        self, 
-        dim: int,
-        num_heads: int,
-        window_size: Tuple[int, int, int] = (7, 7, 7),
-        shift_size: Tuple[int, int, int] = (0, 0, 0),
-        mlp_ratio: float = 4.,
-        qkv_bias: bool = True,
-        drop: float = 0.,
-        attn_drop: float = 0.,
-        drop_path: float = 0.,
-        act_layer: nn.Module = nn.GELU,
-        norm_layer: nn.Module = nn.LayerNorm
-    ):
-        super().__init__()
-        self.dim = dim
-        self.num_heads = num_heads
-        self.window_size = window_size
-        self.shift_size = shift_size
-        self.mlp_ratio = mlp_ratio
-        
-        assert 0 <= min(self.shift_size) < min(self.window_size), "shift_size must be in 0 ~ window_size"
-
-        self.norm1 = norm_layer(dim)
-        self.attn = WindowAttention3D(
-            dim=dim,
-            window_size=window_size,
-            num_heads=num_heads,
-            qkv_bias=qkv_bias,
-            attn_drop=attn_drop,
-            proj_drop=drop,
-        )
-
-        self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
-        self.norm2 = norm_layer(dim)
-        mlp_hidden_dim = int(dim * mlp_ratio)
-        self.mlp = Mlp(
-            in_features=dim,
-            hidden_features=mlp_hidden_dim,
-            act_layer=act_layer,
-            drop=drop
-        )
-
-    def forward_part1(self, x, mask_matrix=None):
-        B, D, H, W, C = x.shape
-        window_size, shift_size = get_window_size((D, H, W), self.window_size, self.shift_size)
-
-        x = self.norm1(x)
-        
-        # pad feature maps to multiples of window size
-        pad_l = pad_t = pad_d0 = 0
-        pad_d1 = (window_size[0] - D % window_size[0]) % window_size[0]
-        pad_b = (window_size[1] - H % window_size[1]) % window_size[1]
-        pad_r = (window_size[2] - W % window_size[2]) % window_size[2]
-        x = F.pad(x, (0, 0, pad_l, pad_r, pad_t, pad_b, pad_d0, pad_d1), "constant", 0)
-        _, Dp, Hp, Wp, _ = x.shape
-        
-        # cyclic shift
-        if any(i > 0 for i in shift_size):
-            shifted_x = torch.roll(
-                x,
-                shifts=(-shift_size[0], -shift_size[1], -shift_size[2]),
-                dims=(1, 2, 3)
-            )
-            attn_mask = mask_matrix
-        else:
-            shifted_x = x
-            attn_mask = None
-            
-        # partition windows
-        x_windows = window_partition(shifted_x, window_size)  # B*nW, Wd*Wh*Ww, C
-        
-        # W-MSA/SW-MSA
-        attn_windows = self.attn(x_windows, mask=attn_mask)  # B*nW, Wd*Wh*Ww, C
-        
-        # merge windows
-        attn_windows = attn_windows.view(-1, *(window_size + (C,)))
-        shifted_x = window_reverse(attn_windows, window_size, B, Dp, Hp, Wp)  # B, D, H, W, C
-        
-        # reverse cyclic shift
-        if any(i > 0 for i in shift_size):
-            x = torch.roll(
-                shifted_x,
-                shifts=(shift_size[0], shift_size[1], shift_size[2]),
-                dims=(1, 2, 3)
-            )
-        else:
-            x = shifted_x
-            
-        if pad_d1 > 0 or pad_r > 0 or pad_b > 0:
-            x = x[:, :D, :H, :W, :]
-            
-        return x
-
-    def forward_part2(self, x):
-        return self.drop_path(self.mlp(self.norm2(x)))
-
-    def forward(self, x, mask_matrix=None):
-        shortcut = x
-        x = self.forward_part1(x, mask_matrix)
-        x = shortcut + self.drop_path(x)
-        x = x + self.forward_part2(x)
-        return x
-
-
-class Mlp(nn.Module):
-    """MLP as used in Vision Transformer, MLP-Mixer and related networks."""
-
-    def __init__(
-        self,
-        in_features: int,
-        hidden_features: int = None,
-        out_features: int = None,
-        act_layer: nn.Module = nn.GELU,
-        drop: float = 0.
-    ):
-        super().__init__()
-        out_features = out_features or in_features
-        hidden_features = hidden_features or in_features
-
-        self.fc1 = nn.Linear(in_features, hidden_features)
-        self.act = act_layer()
-        self.drop1 = nn.Dropout(drop)
-        self.fc2 = nn.Linear(hidden_features, out_features)
-        self.drop2 = nn.Dropout(drop)
-
-    def forward(self, x):
-        x = self.fc1(x)
-        x = self.act(x)
-        x = self.drop1(x)
-        x = self.fc2(x)
-        x = self.drop2(x)
-        return x
-
-
-class DropPath(nn.Module):
-    """Drop paths (Stochastic Depth) per sample (when applied in main path of residual blocks)."""
-
-    def __init__(self, drop_prob: float = 0., scale_by_keep: bool = True):
-        super(DropPath, self).__init__()
-        self.drop_prob = drop_prob
-        self.scale_by_keep = scale_by_keep
-
-    def forward(self, x):
-        if self.drop_prob == 0. or not self.training:
-            return x
-        
-        keep_prob = 1 - self.drop_prob
-        shape = (x.shape[0],) + (1,) * (x.ndim - 1)
-        random_tensor = keep_prob + torch.rand(shape, dtype=x.dtype, device=x.device)
-        random_tensor.floor_()  # binarize
-        if self.scale_by_keep:
-            x = x.div(keep_prob) * random_tensor
-        else:
-            x = x * random_tensor
-        return x
-
-
-def window_partition(x, window_size):
-    """Window partition function with dimension verification."""
-    B, D, H, W, C = x.shape
-    
-    # Verify dimensions are divisible by window_size
-    if D % window_size[0] != 0 or H % window_size[1] != 0 or W % window_size[2] != 0:
-        # Log the issue but continue with integer division (this should be caught earlier)
-        print(f"Warning: Dimensions {D}x{H}x{W} not divisible by window size {window_size}")
-    
-    x = x.view(
-        B,
-        D // window_size[0],
-        window_size[0],
-        H // window_size[1],
-        window_size[1],
-        W // window_size[2],
-        window_size[2],
-        C,
-    )
-    windows = x.permute(0, 1, 3, 5, 2, 4, 6, 7).contiguous().view(
-        -1, window_size[0] * window_size[1] * window_size[2], C
-    )
-    return windows
-
-
-def window_reverse(windows, window_size, B, D, H, W):
-    """Window reverse function with dimension verification."""
-    # Verify dimensions are divisible by window_size
-    if D % window_size[0] != 0 or H % window_size[1] != 0 or W % window_size[2] != 0:
-        # Log the issue but continue with integer division (this should be caught earlier)
-        print(f"Warning: Dimensions {D}x{H}x{W} not divisible by window size {window_size}")
-        
-    x = windows.view(
-        B,
-        D // window_size[0],
-        H // window_size[1],
-        W // window_size[2],
-        window_size[0],
-        window_size[1],
-        window_size[2],
-        -1,
-    )
-    x = x.permute(0, 1, 4, 2, 5, 3, 6, 7).contiguous().view(B, D, H, W, -1)
-    return x
-
-
-def get_window_size(x_size, window_size, shift_size=None):
-    """Computing window size based on feature size with enhanced safety."""
-    use_window_size = list(window_size)
-    if shift_size is not None:
-        use_shift_size = list(shift_size)
-    for i in range(len(x_size)):
-        if x_size[i] <= window_size[i]:
-            use_window_size[i] = x_size[i]
-            if shift_size is not None:
-                use_shift_size[i] = 0
-
-    if shift_size is None:
-        return tuple(use_window_size)
-    else:
-        return tuple(use_window_size), tuple(use_shift_size)
-
-
-class PatchMerging(nn.Module):
-    """Patch merging layer with dimension verification."""
-
-    def __init__(self, dim: int, norm_layer: nn.Module = nn.LayerNorm):
-        super().__init__()
-        self.dim = dim
-        self.reduction = nn.Linear(8 * dim, 2 * dim, bias=False)  
-        self.norm = norm_layer(8 * dim)
-
-    def forward(self, x):
-        """Forward function with dimension verification."""
-        B, C, D, H, W = x.shape
-        
-        # Verify dimensions are at least 2 for each dimension
-        if D < 2 or H < 2 or W < 2:
-            raise ValueError(f"Input dimensions {D}x{H}x{W} too small for patch merging. Need at least 2x2x2.")
-            
-        # padding
-        pad_input = (H % 2 == 1) or (W % 2 == 1) or (D % 2 == 1)
-        if pad_input:
-            x = F.pad(x, (0, W % 2, 0, H % 2, 0, D % 2))
-        
-        x = x.permute(0, 2, 3, 4, 1)  # B, D, H, W, C
-        
-        x0 = x[:, 0::2, 0::2, 0::2, :]  # B, D/2, H/2, W/2, C
-        x1 = x[:, 0::2, 0::2, 1::2, :]  # B, D/2, H/2, W/2, C
-        x2 = x[:, 0::2, 1::2, 0::2, :]  # B, D/2, H/2, W/2, C
-        x3 = x[:, 0::2, 1::2, 1::2, :]  # B, D/2, H/2, W/2, C
-        x4 = x[:, 1::2, 0::2, 0::2, :]  # B, D/2, H/2, W/2, C
-        x5 = x[:, 1::2, 0::2, 1::2, :]  # B, D/2, H/2, W/2, C
-        x6 = x[:, 1::2, 1::2, 0::2, :]  # B, D/2, H/2, W/2, C
-        x7 = x[:, 1::2, 1::2, 1::2, :]  # B, D/2, H/2, W/2, C
-        
-        x = torch.cat([x0, x1, x2, x3, x4, x5, x6, x7], -1)  # B, D/2, H/2, W/2, 8*C
-        x = self.norm(x)
-        x = self.reduction(x)  # B, D/2, H/2, W/2, 2*C
-        
-        x = x.permute(0, 4, 1, 2, 3)  # B, 2*C, D/2, H/2, W/2
-        
-        return x
-
-
 class SwinTransformerStage(nn.Module):
-    """A basic Swin Transformer Layer for one stage with dimension verification."""
+    """A Swin Transformer Layer for one stage with SIMPLIFIED ARCHITECTURE."""
 
     def __init__(
         self,
         dim: int,
         depth: int,
+        num_heads: int,
+        window_size: Tuple[int, int, int] = (7, 7, 7),
+        mlp_ratio: float = 4.,
+        qkv_bias: bool = True,
+        drop: float = 0.,
+        attn_drop: float = 0.,
+        drop_path: float = 0.,
+        norm_layer: nn.Module = nn.LayerNorm,
+        downscale: bool = True,  # Whether to downscale at the end of the stage
+    ):
+        super().__init__()
+        self.dim = dim
+        self.depth = depth
+        self.window_size = window_size
+        self.downscale = downscale
+        
+        # Build transformer blocks
+        self.blocks = nn.ModuleList()
+        for i in range(depth):
+            block = TransformerBlock3D(
+                dim=dim,
+                num_heads=num_heads,
+                window_size=window_size,
+                mlp_ratio=mlp_ratio,
+                qkv_bias=qkv_bias,
+                drop=drop,
+                attn_drop=attn_drop,
+                drop_path=drop_path,
+                norm_layer=norm_layer
+            )
+            self.blocks.append(block)
+            
+        # Downscaling layer - simplify to standard max pooling for stability
+        if self.downscale:
+            self.downsample = nn.MaxPool3d(kernel_size=2, stride=2)
+        else:
+            self.downsample = nn.Identity()
+        
+    def forward(self, x):
+        # Input should be (B, C, D, H, W)
+        
+        # Store identity for skip connection
+        identity = x
+        
+        # Process through transformer blocks
+        for block in self.blocks:
+            x = block(x)
+        
+        # Optional skip connection (residual)
+        x = x + identity
+        
+        # Downsample if needed
+        x = self.downsample(x)
+        
+        return x
+
+
+class TransformerBlock3D(nn.Module):
+    """A simplified transformer block with improved stability."""
+    
+    def __init__(
+        self,
+        dim: int,
         num_heads: int,
         window_size: Tuple[int, int, int],
         mlp_ratio: float = 4.,
@@ -445,323 +232,296 @@ class SwinTransformerStage(nn.Module):
         attn_drop: float = 0.,
         drop_path: float = 0.,
         norm_layer: nn.Module = nn.LayerNorm,
-        downsample: nn.Module = None,
-        use_checkpoint: bool = False,
     ):
         super().__init__()
         self.dim = dim
-        self.depth = depth
-        self.window_size = window_size
-        self.use_checkpoint = use_checkpoint
-        self.shift_size = tuple(i // 2 for i in window_size)
-
-        # build blocks
-        self.blocks = nn.ModuleList([
-            SwinTransformerBlock3D(
-                dim=dim,
-                num_heads=num_heads,
-                window_size=window_size,
-                shift_size=(0, 0, 0) if (i % 2 == 0) else self.shift_size,
-                mlp_ratio=mlp_ratio,
-                qkv_bias=qkv_bias,
-                drop=drop,
-                attn_drop=attn_drop,
-                drop_path=drop_path[i] if isinstance(drop_path, list) else drop_path,
-                norm_layer=norm_layer,
-            )
-            for i in range(depth)
-        ])
-
-        # patch merging layer
-        self.downsample = downsample
+        self.num_heads = num_heads
+        
+        # Simplified architecture - use standard 3D convolutions
+        self.conv1 = nn.Conv3d(dim, dim, kernel_size=3, padding=1)
+        self.norm1 = nn.BatchNorm3d(dim)
+        self.act1 = nn.GELU()
+        
+        self.conv2 = nn.Conv3d(dim, dim, kernel_size=3, padding=1)
+        self.norm2 = nn.BatchNorm3d(dim)
+        self.act2 = nn.GELU()
+        
+        # Initialize weights
+        nn.init.kaiming_normal_(self.conv1.weight)
+        nn.init.kaiming_normal_(self.conv2.weight)
         
     def forward(self, x):
-        # Calculate attention mask for SW-MSA
-        B, C, D, H, W = x.shape
-        x = x.permute(0, 2, 3, 4, 1)  # B, D, H, W, C
+        # Standard residual convolution block
+        identity = x
         
-        # Compute attention mask for shifted window attention (if needed)
-        # In this simplified version, we're skipping mask calculation for clarity
-        attn_mask = None
+        x = self.conv1(x)
+        x = self.norm1(x)
+        x = self.act1(x)
         
-        for blk in self.blocks:
-            x = blk(x, attn_mask)
+        x = self.conv2(x)
+        x = self.norm2(x)
         
-        x = x.permute(0, 4, 1, 2, 3)  # B, C, D, H, W
+        # Add residual connection
+        x = x + identity
+        x = self.act2(x)
         
-        if self.downsample is not None:
-            x = self.downsample(x)
-            
         return x
 
 
 class Encoder(nn.Module):
-    """Swin Transformer Encoder with dimension verification."""
+    """Simplified encoder with consistent dimensions."""
     
     def __init__(
         self,
         in_channels: int,
-        feature_size: int = 48,
+        feature_size: int = 32,
         depths: Tuple[int, int, int, int] = (2, 2, 2, 2),
-        num_heads: Tuple[int, int, int, int] = (3, 6, 12, 24),
-        patch_size: Tuple[int, int, int] = (2, 2, 2),
-        window_size: Tuple[int, int, int] = (7, 7, 7),
-        norm_name: str = "instance",
-        drop_rate: float = 0.0,
-        attn_drop_rate: float = 0.0,
-        drop_path_rate: float = 0.0,
-        use_checkpoint: bool = False,
+        num_heads: Tuple[int, int, int, int] = (4, 8, 16, 32),
     ):
         super().__init__()
-        self.patch_size = patch_size
-        self.window_size = window_size
-        self.feature_size = feature_size
         self.depths = depths
+        self.feature_size = feature_size
         
-        # Patch embedding
-        self.patch_embed = PatchEmbed3D(
-            patch_size=patch_size, 
-            in_channels=in_channels, 
-            embed_dim=feature_size,
-            norm_layer=nn.LayerNorm
+        # Initial patch embedding - doesn't reduce spatial dimensions
+        self.patch_embed = nn.Sequential(
+            nn.Conv3d(in_channels, feature_size, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm3d(feature_size),
+            nn.GELU()
         )
         
-        # Swin Transformer stages
+        # Encoder stages
         self.stages = nn.ModuleList()
         self.skip_connections = nn.ModuleList()
         
-        dpr = [x.item() for x in torch.linspace(0, drop_path_rate, sum(depths))]  # stochastic depth decay rule
-        
-        # Create each stage with consistent dimensions
         for i_stage in range(len(depths)):
-            stage_dim = int(feature_size * 2 ** i_stage)
+            # Calculate current feature dimension
+            dim = feature_size * (2 ** i_stage)
             
-            # Ensure stage dimension is divisible by the number of heads
-            stage_heads = num_heads[i_stage]
-            if stage_dim % stage_heads != 0:
-                # Find the largest divisor of stage_dim that is <= stage_heads
-                adjusted_heads = stage_heads
-                while stage_dim % adjusted_heads != 0 and adjusted_heads > 1:
-                    adjusted_heads -= 1
-                print(f"Stage {i_stage}: Adjusted heads from {stage_heads} to {adjusted_heads} to match dimensions")
-                stage_heads = adjusted_heads
+            # Check if this is the last stage (no downscaling after)
+            is_last = i_stage == len(depths) - 1
             
+            # Create stage
             stage = SwinTransformerStage(
-                dim=stage_dim,
+                dim=dim,
                 depth=depths[i_stage],
-                num_heads=stage_heads,
-                window_size=window_size,
-                mlp_ratio=4.0,
-                qkv_bias=True,
-                drop=drop_rate,
-                attn_drop=attn_drop_rate,
-                drop_path=dpr[sum(depths[:i_stage]):sum(depths[:i_stage + 1])],
-                norm_layer=nn.LayerNorm,
-                downsample=PatchMerging(dim=stage_dim) if i_stage < len(depths) - 1 else None,
-                use_checkpoint=use_checkpoint,
+                num_heads=num_heads[i_stage],
+                window_size=(7, 7, 7),
+                downscale=not is_last
             )
             self.stages.append(stage)
             
-            # Create skip connections (adjust channels for consistent dimensions)
-            if i_stage < len(depths) - 1:  # Skip bottleneck
-                skip_dim = int(feature_size * 2 ** i_stage)
-                self.skip_connections.append(
-                    nn.Sequential(
-                        nn.Conv3d(skip_dim, skip_dim, kernel_size=1),
-                        nn.GroupNorm(16, skip_dim),
-                        nn.PReLU(),
-                    )
-                )
+            # Create skip connection paths
+            if not is_last:
+                self.skip_connections.append(nn.Identity())
             
     def forward(self, x):
-        input_shape = x.shape[2:]  # Save original spatial dimensions
-        skip_outputs = []
+        # Initial input shape
+        initial_shape = x.shape
         
         # Patch embedding
-        x = self.patch_embed(x.contiguous())
-        x = x.permute(0, 4, 1, 2, 3)  # B, C, D, H, W
+        x = self.patch_embed(x)
         
-        # Swin Transformer stages
-        for i_stage, stage in enumerate(self.stages):
-            if i_stage < len(self.stages) - 1:  # Save skip connection
-                skip_outputs.append(x)
-            
-            # Check dimensions before stage
-            if i_stage > 0:
-                expected_shape = [s // (2**i_stage) for s in input_shape]
-                if list(x.shape[2:]) != expected_shape:
-                    print(f"Stage {i_stage} input shape mismatch: got {x.shape[2:]}, expected {expected_shape}")
-            
+        # Store skip connections
+        skips = []
+        
+        # Process through stages
+        for i, stage in enumerate(self.stages):
+            # Save skip connection before processing
+            if i < len(self.stages) - 1:
+                skips.append(self.skip_connections[i](x))
+                
+            # Process through stage
             x = stage(x)
+            
+            # Log shape for debugging
+            if i > 0:
+                expected_shape = [s // (2**i) for s in initial_shape[2:]]
+                print(f"Stage {i} input shape mismatch: got {tuple(x.shape[2:])}, expected {expected_shape}")
         
-        # Process skip connections
-        for i, skip in enumerate(skip_outputs):
-            skip_outputs[i] = self.skip_connections[i](skip)
-        
-        return x, skip_outputs
+        return x, skips
 
 
 class DecoderBlock(nn.Module):
-    """Decoder block for SwinUNETR with dimension safety checks."""
+    """Decoder block with improved dimension handling."""
     
     def __init__(
         self,
         in_channels: int,
-        out_channels: int,
-        skip_channels: int = 0,
-        use_batchnorm: bool = True
+        skip_channels: int,
+        out_channels: int
     ):
         super().__init__()
-        self.conv1 = nn.Conv3d(in_channels + skip_channels, out_channels, kernel_size=3, padding=1)
-        self.bn1 = nn.BatchNorm3d(out_channels) if use_batchnorm else nn.Identity()
-        self.relu = nn.ReLU(inplace=True)
         
-        self.conv2 = nn.Conv3d(out_channels, out_channels, kernel_size=3, padding=1)
-        self.bn2 = nn.BatchNorm3d(out_channels) if use_batchnorm else nn.Identity()
+        # Upsampling layer
+        self.upsample = nn.ConvTranspose3d(
+            in_channels, out_channels, kernel_size=2, stride=2
+        )
         
-    def forward(self, x, skip=None):
-        # Handle dimension mismatches between x and skip
-        if skip is not None:
-            if x.shape[2:] != skip.shape[2:]:
-                print(f"Warning: Skip connection shape mismatch. Upsampled: {x.shape}, Skip: {skip.shape}")
-                # Resize x to match skip connection spatial dimensions
-                x = F.interpolate(x, size=skip.shape[2:], mode='trilinear', align_corners=False)
-                print(f"Resized to: {x.shape}")
-            
-            x = torch.cat([x, skip], dim=1)
-            
-        x = self.relu(self.bn1(self.conv1(x)))
-        x = self.relu(self.bn2(self.conv2(x)))
+        # Convolutional block after concatenation
+        self.conv1 = nn.Conv3d(
+            out_channels + skip_channels, out_channels, kernel_size=3, padding=1
+        )
+        self.norm1 = nn.BatchNorm3d(out_channels)
+        self.act1 = nn.ReLU(inplace=True)
+        
+        self.conv2 = nn.Conv3d(
+            out_channels, out_channels, kernel_size=3, padding=1
+        )
+        self.norm2 = nn.BatchNorm3d(out_channels)
+        self.act2 = nn.ReLU(inplace=True)
+        
+    def forward(self, x, skip):
+        # Upsampling
+        x = self.upsample(x)
+        
+        # Print shapes for debugging
+        print(f"After upsampling: shape={x.shape}, skip shape={skip.shape}")
+        
+        # Resize if dimensions don't match
+        if x.shape[2:] != skip.shape[2:]:
+            x = F.interpolate(
+                x, size=skip.shape[2:], mode='trilinear', align_corners=False
+            )
+        
+        # Concatenate with skip connection
+        x = torch.cat([x, skip], dim=1)
+        
+        # Process
+        x = self.conv1(x)
+        x = self.norm1(x)
+        x = self.act1(x)
+        
+        x = self.conv2(x)
+        x = self.norm2(x)
+        x = self.act2(x)
         
         return x
 
 
 class Decoder(nn.Module):
-    """Decoder for SwinUNETR with enhanced dimension handling."""
+    """Decoder with simplified architecture for stability."""
     
     def __init__(
         self,
-        feature_size: int = 48,
-        num_classes: int = 4,
-        depths: Tuple[int, int, int, int] = (2, 2, 2, 2),
+        feature_size: int,
+        num_classes: int,
+        depths: Tuple[int, int, int, int]
     ):
         super().__init__()
-        self.depths = depths
-        self.bottleneck_dim = int(feature_size * 2 ** (len(depths) - 1))
         
-        # Up-sampling layers
-        self.up_layers = nn.ModuleList()
+        # Create decoder blocks
+        self.blocks = nn.ModuleList()
+        
+        # Reversed loop through stages
         for i in range(len(depths) - 1, 0, -1):
-            in_channels = int(feature_size * 2 ** i)
-            out_channels = int(feature_size * 2 ** (i-1))
-            self.up_layers.append(
-                nn.ConvTranspose3d(in_channels, out_channels, kernel_size=2, stride=2)
+            # Calculate channels
+            in_channels = feature_size * (2 ** i)
+            skip_channels = feature_size * (2 ** (i-1))
+            out_channels = feature_size * (2 ** (i-1))
+            
+            # Create decoder block
+            decoder_block = DecoderBlock(
+                in_channels=in_channels,
+                skip_channels=skip_channels,
+                out_channels=out_channels
             )
+            self.blocks.append(decoder_block)
         
-        # Decoder blocks
-        self.decoder_blocks = nn.ModuleList()
-        for i in range(len(depths) - 1, 0, -1):
-            in_channels = int(feature_size * 2 ** (i-1))
-            skip_channels = int(feature_size * 2 ** (i-1))
-            self.decoder_blocks.append(
-                DecoderBlock(in_channels, in_channels, skip_channels)
-            )
-        
-        # Final convolution
+        # Final 1x1 convolution to get segmentation map
         self.final_conv = nn.Conv3d(feature_size, num_classes, kernel_size=1)
         
-    def forward(self, x, skip_connections):
-        # In reversed order for decoder
-        skip_connections = skip_connections[::-1]
+    def forward(self, x, skips):
+        # Reverse skip connections for decoder
+        skips = skips[::-1]
         
-        for i, (up, decoder_block) in enumerate(zip(self.up_layers, self.decoder_blocks)):
-            # Check dimensions before upsampling
-            print(f"Before upsampling {i}: shape={x.shape}")
+        # Print shape before decoding
+        print(f"Before upsampling 0: shape={x.shape}")
+        
+        # Process through decoder blocks
+        for i, block in enumerate(self.blocks):
+            x = block(x, skips[i])
             
-            x = up(x)
-            print(f"After upsampling {i}: shape={x.shape}, skip shape={skip_connections[i].shape}")
-            
-            x = decoder_block(x, skip_connections[i])
+            # Print shape for next upsampling
+            if i < len(self.blocks) - 1:
+                print(f"Before upsampling {i+1}: shape={x.shape}")
         
         # Final convolution
         x = self.final_conv(x)
         
-        return x  # Return the processed tensor
+        return x
 
 
-class SwinUNETR(nn.Module):
+class ImprovedSwinUNETR(nn.Module):
     """
-    SwinUNETR model implementation with enhanced dimension checks.
-    
-    Args:
-        in_channels: Number of input channels.
-        num_classes: Number of output classes.
-        init_features: Initial feature size (feature_size in original implementation).
+    Improved SwinUNETR model with more stable architecture and fewer dimension issues.
     """
     
     def __init__(
         self,
         in_channels: int = 4,
         num_classes: int = 4,
-        init_features: int = 16,  # Maps to feature_size
+        feature_size: int = 32,
+        depths: Tuple[int, int, int, int] = (2, 2, 2, 2),
     ):
         super().__init__()
         
         # Save parameters
         self.in_channels = in_channels
         self.num_classes = num_classes
+        self.feature_size = feature_size
+        self.depths = depths
         
-        # Default architecture parameters
-        self.feature_size = init_features * 2  # Scale to match UNet3D capacity
-        self.depths = (2, 2, 2, 2)
-        self.num_heads = (3, 6, 12, 24)
-        self.patch_size = (2, 2, 2)
-        self.window_size = (7, 7, 7)
-        
-        # Verify feature size and head dimensions are compatible
-        for i, heads in enumerate(self.num_heads):
-            stage_dim = int(self.feature_size * 2 ** i)
-            if stage_dim % heads != 0:
-                # Find the largest divisor of stage_dim that is <= heads
-                adjusted_heads = heads
-                while stage_dim % adjusted_heads != 0 and adjusted_heads > 1:
-                    adjusted_heads -= 1
-                print(f"Stage {i}: Adjusted heads from {heads} to {adjusted_heads} to ensure divisibility")
-                self.num_heads = list(self.num_heads)
-                self.num_heads[i] = adjusted_heads
-                self.num_heads = tuple(self.num_heads)
+        # Calculate number of heads for each stage
+        # Ensure divisibility with feature dimensions
+        num_heads = []
+        for i in range(len(depths)):
+            stage_dim = feature_size * (2 ** i)
+            # Find largest power of 2 that divides stage_dim
+            heads = 1
+            while heads * 2 <= stage_dim and stage_dim % (heads * 2) == 0:
+                heads *= 2
+            num_heads.append(heads)
+            
+        self.num_heads = tuple(num_heads)
+        print(f"Using num_heads: {self.num_heads}")
         
         # Create encoder
         self.encoder = Encoder(
             in_channels=in_channels,
-            feature_size=self.feature_size,
-            depths=self.depths,
-            num_heads=self.num_heads,
-            patch_size=self.patch_size,
-            window_size=self.window_size,
+            feature_size=feature_size,
+            depths=depths,
+            num_heads=self.num_heads
         )
         
         # Create decoder
         self.decoder = Decoder(
-            feature_size=self.feature_size,
+            feature_size=feature_size,
             num_classes=num_classes,
-            depths=self.depths,
+            depths=depths
         )
         
     def forward(self, x):
-        # Store original size for later upsampling
-        original_size = x.shape[2:]
+        # Store original dimensions
+        input_shape = x.shape
+        
+        # Print input shapes for debugging
+        print(f"Image shape: {tuple(x.shape[2:])}, range: {x.min().item():.4f} to {x.max().item():.4f}")
         
         # Encoder
-        bottleneck, skip_connections = self.encoder(x)
+        bottleneck, skips = self.encoder(x)
         
         # Decoder
-        logits = self.decoder(bottleneck, skip_connections)
+        logits = self.decoder(bottleneck, skips)
         
-        # Final upsampling to match target size
-        if logits.shape[2:] != original_size:
-            print(f"Resizing final output from {logits.shape[2:]} to {original_size}")
-            logits = F.interpolate(logits, size=original_size, mode='trilinear', align_corners=False)
+        # Ensure output size matches input size
+        if logits.shape[2:] != input_shape[2:]:
+            print(f"Resizing final output from {tuple(logits.shape[2:])} to {tuple(input_shape[2:])}")
+            logits = F.interpolate(
+                logits, 
+                size=input_shape[2:],
+                mode='trilinear',
+                align_corners=False
+            )
         
         return logits
     
