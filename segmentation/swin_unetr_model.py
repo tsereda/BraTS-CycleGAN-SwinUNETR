@@ -637,7 +637,7 @@ class SwinUNETR(nn.Module):
         self.num_classes = num_classes
         
         # Default architecture parameters
-        self.feature_size = init_features * 3  # Scale to match UNet3D capacity
+        self.feature_size = init_features * 2  # Scale to match UNet3D capacity
         self.depths = (2, 2, 2, 2)
         self.num_heads = (3, 6, 12, 24)
         self.patch_size = (2, 2, 2)
