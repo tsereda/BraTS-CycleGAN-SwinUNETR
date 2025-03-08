@@ -31,7 +31,7 @@ conda activate BraTS
 
 ```bash
 # Build the Docker image
-docker build -t brats-swinunetr:latest .
+docker build -t gitlab-registry.nrp-nautilus.io/timothy.sereda/brats-cyclegan-swinunetr:latest .
 
 # Run the container
 docker run --gpus all -v /path/to/data:/opt/app/data brats-swinunetr:latest
