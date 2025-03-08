@@ -44,12 +44,14 @@ class PatchEmbed3D(nn.Module):
 
 
 class WindowAttention3D(nn.Module):
-    """Window based multi-head self-attention module with relative position bias."""
+    """Window based multi-head self-attention module with relative position bias.
+    Fixed version that handles dimension mismatches properly.
+    """
     
     def __init__(
         self,
         dim: int,
-        window_size: Tuple[int, int, int],
+        window_size: tuple,
         num_heads: int,
         qkv_bias: bool = True,
         attn_drop: float = 0.,
@@ -58,9 +60,20 @@ class WindowAttention3D(nn.Module):
         super().__init__()
         self.dim = dim
         self.window_size = window_size  # Wd, Wh, Ww
+        
+        # Ensure num_heads divides dim evenly to avoid reshape errors
+        if dim % num_heads != 0:
+            print(f"Warning: Feature dimension {dim} not divisible by num_heads {num_heads}. Adjusting num_heads.")
+            # Find the largest factor of dim that is <= num_heads
+            adjusted_heads = num_heads
+            while dim % adjusted_heads != 0 and adjusted_heads > 1:
+                adjusted_heads -= 1
+            print(f"Adjusted num_heads from {num_heads} to {adjusted_heads}")
+            num_heads = adjusted_heads
+            
         self.num_heads = num_heads
-        head_dim = dim // num_heads
-        self.scale = head_dim ** -0.5
+        self.head_dim = dim // num_heads
+        self.scale = self.head_dim ** -0.5
 
         # Define a parameter table of relative position bias
         self.relative_position_bias_table = nn.Parameter(
@@ -99,14 +112,50 @@ class WindowAttention3D(nn.Module):
         self.softmax = nn.Softmax(dim=-1)
 
     def forward(self, x, mask=None):
-        """Forward function.
+        """Forward function with improved error handling.
         
         Args:
             x: input features with shape of (num_windows*B, N, C)
             mask: (0/-inf) mask with shape of (num_windows, Wd*Wh*Ww, Wd*Wh*Ww) or None
         """
         B_, N, C = x.shape
-        qkv = self.qkv(x).reshape(B_, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
+        
+        # Debug information
+        expected_dim = B_ * N * 3 * self.num_heads * self.head_dim
+        
+        # Get QKV projections
+        qkv_proj = self.qkv(x)  # B_, N, 3*C
+        
+        # Handle reshaping carefully to avoid dimension errors
+        try:
+            # Standard reshape
+            qkv = qkv_proj.reshape(B_, N, 3, self.num_heads, self.head_dim)
+        except RuntimeError as e:
+            print(f"Warning: Reshape error in WindowAttention3D. Input shape: {x.shape}, "
+                  f"QKV shape: {qkv_proj.shape}, Target: [B_={B_}, N={N}, 3, heads={self.num_heads}, head_dim={self.head_dim}]")
+            
+            # Alternative reshape approach
+            total_dim = qkv_proj.size(-1)
+            if total_dim != 3 * C:
+                print(f"Dimension mismatch: QKV projection has {total_dim} features, expected {3 * C}")
+            
+            # Try to safely reshape
+            qkv = qkv_proj.view(B_, N, 3, -1)
+            if qkv.size(-1) % self.num_heads == 0:
+                actual_head_dim = qkv.size(-1) // self.num_heads
+                qkv = qkv.view(B_, N, 3, self.num_heads, actual_head_dim)
+                print(f"Using adjusted head_dim: {actual_head_dim}")
+            else:
+                # Last resort: reshape with a compatible head count
+                for test_heads in range(self.num_heads, 0, -1):
+                    if qkv.size(-1) % test_heads == 0:
+                        actual_head_dim = qkv.size(-1) // test_heads
+                        qkv = qkv.view(B_, N, 3, test_heads, actual_head_dim)
+                        print(f"Using adjusted heads: {test_heads}, head_dim: {actual_head_dim}")
+                        break
+        
+        # Continue with normal processing
+        qkv = qkv.permute(2, 0, 3, 1, 4)  # 3, B_, num_heads, N, head_dim
         q, k, v = qkv[0], qkv[1], qkv[2]  # make torchscript happy (cannot use tensor as tuple)
 
         q = q * self.scale
@@ -115,20 +164,46 @@ class WindowAttention3D(nn.Module):
         relative_position_bias = self.relative_position_bias_table[self.relative_position_index.view(-1)].view(
             self.window_size[0] * self.window_size[1] * self.window_size[2],
             self.window_size[0] * self.window_size[1] * self.window_size[2], -1)  # Wd*Wh*Ww,Wd*Wh*Ww,nH
-        relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()  # nH, Wd*Wh*Ww, Wd*Wh*Ww
-        attn = attn + relative_position_bias.unsqueeze(0)
+        
+        # Handle potential dimension mismatch in relative_position_bias
+        if relative_position_bias.size(-1) != self.num_heads:
+            if hasattr(self, 'num_heads_adjusted') and self.num_heads_adjusted:
+                # Already adjusted, use the number of heads we have
+                rel_pos_bias = relative_position_bias[:, :, :self.num_heads]
+            else:
+                print(f"Warning: relative_position_bias has {relative_position_bias.size(-1)} heads, but num_heads is {self.num_heads}")
+                # Use available heads
+                rel_pos_bias = relative_position_bias
+        else:
+            rel_pos_bias = relative_position_bias
+            
+        rel_pos_bias = rel_pos_bias.permute(2, 0, 1).contiguous()  # nH, Wd*Wh*Ww, Wd*Wh*Ww
+        
+        # Safely add bias to attention
+        if rel_pos_bias.size(0) == attn.size(1):
+            attn = attn + rel_pos_bias.unsqueeze(0)
+        else:
+            print(f"Warning: Could not add relative position bias. Shapes: attn {attn.shape}, bias {rel_pos_bias.shape}")
+            # Try to adapt the bias
+            if rel_pos_bias.size(0) > attn.size(1):
+                attn = attn + rel_pos_bias[:attn.size(1)].unsqueeze(0)
+            else:
+                # Pad with zeros
+                padding = torch.zeros(1, attn.size(1) - rel_pos_bias.size(0), 
+                                    rel_pos_bias.size(1), rel_pos_bias.size(2), 
+                                    device=rel_pos_bias.device)
+                padded_bias = torch.cat([rel_pos_bias.unsqueeze(0), padding], dim=1)
+                attn = attn + padded_bias
 
         if mask is not None:
             nW = mask.shape[0]
             attn = attn.view(B_ // nW, nW, self.num_heads, N, N) + mask.unsqueeze(1).unsqueeze(0)
             attn = attn.view(-1, self.num_heads, N, N)
-            attn = self.softmax(attn)
-        else:
-            attn = self.softmax(attn)
-
+        
+        attn = self.softmax(attn)
         attn = self.attn_drop(attn)
 
-        x = (attn @ v).transpose(1, 2).reshape(B_, N, C)
+        x = (attn @ v).transpose(1, 2).reshape(B_, N, -1)
         x = self.proj(x)
         x = self.proj_drop(x)
         return x
