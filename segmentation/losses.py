@@ -119,7 +119,7 @@ class CombinedLoss(nn.Module):
         self.dice_weight = dice_weight
         self.focal_weight = focal_weight
         self.dice_loss = DiceLoss(weight=class_weights)
-        self.focal_loss = FocalLoss(weight=class_weights)
+        self.focal_loss = FocalLoss(weights=class_weights)
         
     def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         dice = self.dice_loss(logits, targets)

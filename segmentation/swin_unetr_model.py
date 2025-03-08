@@ -612,8 +612,7 @@ class Decoder(nn.Module):
         # Final convolution
         x = self.final_conv(x)
         
-        return x
-
+        return x  # Return the processed tensor
 
 class SwinUNETR(nn.Module):
     """
@@ -662,11 +661,18 @@ class SwinUNETR(nn.Module):
         )
         
     def forward(self, x):
+        # Store original size for later upsampling
+        original_size = x.shape[2:]
+        
         # Encoder
         bottleneck, skip_connections = self.encoder(x)
         
         # Decoder
         logits = self.decoder(bottleneck, skip_connections)
+        
+        # Final upsampling to match target size
+        if logits.shape[2:] != original_size:
+            logits = F.interpolate(logits, size=original_size, mode='trilinear', align_corners=False)
         
         return logits
     
