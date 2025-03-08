@@ -407,7 +407,6 @@ def create_complete_dataset(
         
         has_mask_validation = os.path.exists(mask_path_gz) or os.path.exists(mask_path)
         print(f"Validation data has masks: {has_mask_validation}")
-        upernetona100
         
         validation_processed = preprocess_brats2020(
             validation_data_path, 

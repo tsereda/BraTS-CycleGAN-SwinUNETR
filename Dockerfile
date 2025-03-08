@@ -6,7 +6,6 @@ WORKDIR /opt/app
 
 # Install system dependencies (minimized)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git \
     wget \
     ca-certificates \
     && apt-get clean \
@@ -20,10 +19,10 @@ RUN wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -
 # Add conda to path
 ENV PATH="/opt/conda/bin:${PATH}"
 
-# Clone the repository
-RUN git clone https://github.com/tsereda/BraTS-CycleGAN-SwinUNETR /opt/app
+# Copy local code to the container
+COPY . /opt/app/
 
-# Create conda environment from the cloned repo's environment file
+# Create conda environment from the environment file
 RUN conda env create -f environment.yml
 
 # Make RUN commands use the conda environment
@@ -38,6 +37,9 @@ RUN conda clean -afy && \
     find /opt/conda/ -type f -name '*.js.map' -delete && \
     find /opt/conda/ -type f -name '*.pyc' -delete && \
     find /opt/conda/ -type f -name '*.c' -delete
+
+# Create directories for data and output
+RUN mkdir -p /opt/app/brats20-dataset /opt/app/processed_data /opt/app/logs /opt/app/output
 
 # Set default command
 CMD ["conda", "run", "--no-capture-output", "-n", "BraTS", "python", "segmentation/train.py"]
