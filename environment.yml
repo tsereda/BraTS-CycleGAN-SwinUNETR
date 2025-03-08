@@ -9,7 +9,6 @@ dependencies:
   - matplotlib
   - pandas
   - tensorboard
-  - nibabel
   - kagglehub
   - scikit-learn
   - pip:
