@@ -500,7 +500,7 @@ if __name__ == "__main__":
     config = {
         'data_path': "processed_data/brats128_split/",
         'output_path': "/tmp/output/",
-        'batch_size': 2,        # Increased batch size
+        'batch_size': 4,        # Increased batch size
         'num_workers': 4,       # Increased workers
         'epochs': 100,
         'learning_rate': 1e-4,

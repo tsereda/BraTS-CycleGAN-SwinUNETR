@@ -280,7 +280,7 @@ class Encoder(nn.Module):
     def __init__(
         self,
         in_channels: int,
-        feature_size: int = 32,
+        feature_size: int = 48,
         depths: Tuple[int, int, int, int] = (2, 2, 2, 2),
         num_heads: Tuple[int, int, int, int] = (4, 8, 16, 32),
     ):
