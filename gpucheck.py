@@ -1,58 +1,58 @@
 import torch
 import time
 
-def test_gpu_cuda():
-    """
-    Tests if PyTorch is using the GPU and CUDA successfully.
-    Prints detailed information about the GPU and performance comparison.
-    """
-
-    print("--- PyTorch GPU/CUDA Test Script ---")
+def test_gpu_cuda_fixed():
+    print("--- Improved PyTorch GPU/CUDA Test Script ---")
 
     # 1. Check CUDA Availability
     if torch.cuda.is_available():
         device = torch.device('cuda')
         print(f"\nCUDA is available! PyTorch is using GPU.")
-        print(f"Device name: {torch.cuda.get_device_name(0)}")  # Get GPU name
-        print(f"Device count: {torch.cuda.device_count()}")     # Get number of GPUs
-        print(f"Current device: {torch.cuda.current_device()}") # Get index of current GPU
-        print(f"CUDA version: {torch.version.cuda}")           # Get CUDA version
-        print(f"cuDNN version: {torch.backends.cudnn.version()}") # Get cuDNN version
-
-        # Optional: Check for specific CUDA capabilities (if needed for your use case)
-        # print(f"Device capability: {torch.cuda.get_device_capability(0)}")
-
+        print(f"Device name: {torch.cuda.get_device_name(0)}")
+        print(f"Device count: {torch.cuda.device_count()}")
+        print(f"Current device: {torch.cuda.current_device()}")
+        print(f"CUDA version: {torch.version.cuda}")
+        print(f"cuDNN version: {torch.backends.cudnn.version()}")
+        print(f"cuDNN enabled: {torch.backends.cudnn.enabled}")
     else:
         device = torch.device('cpu')
         print("\nCUDA is NOT available. PyTorch is using CPU.")
-        print("Please ensure you have installed CUDA drivers and a CUDA-enabled GPU.")
-        print("Refer to PyTorch installation instructions for CUDA setup.")
-        return  # Exit the test early if no CUDA
+        return
 
     print(f"\nUsing device: {device}")
 
-    # 2. Create a Tensor and Move it to the Device
-    print("\n--- Tensor Creation and Device Transfer ---")
-    tensor_cpu = torch.randn(5, 5)
+    # 2. Ensure cuDNN is enabled for better performance
+    torch.backends.cudnn.benchmark = True
+    print(f"cuDNN benchmark mode: {torch.backends.cudnn.benchmark}")
 
-    # 3. Perform a Simple Operation on GPU and CPU and Time it
-    print("\n--- Performance Comparison (GPU vs CPU) ---")
-    size = 2000
-    iterations = 4
-
-    # GPU Performance
-    gpu_tensor = torch.randn(size, size).to(device)
+    # 3. Perform more reliable performance test
+    size = 10000  # Larger test for better measurement
+    iterations = 5
+    
+    # GPU Warmup - important for accurate testing
+    warmup_tensor = torch.randn(size, size, device=device)
+    warmup_result = torch.matmul(warmup_tensor, warmup_tensor)
+    torch.cuda.synchronize()  # Wait for GPU to finish
+    
+    # GPU Performance with proper synchronization
+    gpu_tensor = torch.randn(size, size, device=device)
+    torch.cuda.synchronize()
     start_time_gpu = time.time()
+    
     for _ in range(iterations):
-        gpu_tensor @ gpu_tensor  # Matrix multiplication on GPU
+        gpu_result = torch.matmul(gpu_tensor, gpu_tensor)
+        torch.cuda.synchronize()  # Ensure operation is complete
+    
     end_time_gpu = time.time()
     gpu_time = end_time_gpu - start_time_gpu
 
     # CPU Performance
     cpu_tensor = torch.randn(size, size)
     start_time_cpu = time.time()
+    
     for _ in range(iterations):
-        cpu_tensor @ cpu_tensor  # Matrix multiplication on CPU
+        cpu_result = torch.matmul(cpu_tensor, cpu_tensor)
+    
     end_time_cpu = time.time()
     cpu_time = end_time_cpu - start_time_cpu
 
@@ -60,12 +60,24 @@ def test_gpu_cuda():
     print(f"CPU Time ({iterations} iterations of {size}x{size} matrix multiplication): {cpu_time:.4f} seconds")
 
     if device.type == 'cuda':
-        speedup = cpu_time / gpu_time if gpu_time > 0 else float('inf') # Avoid division by zero
+        speedup = cpu_time / gpu_time if gpu_time > 0 else float('inf')
         print(f"\nSpeedup (CPU/GPU): {speedup:.2f}x")
-    else:
-        print("\nNo performance comparison possible as CUDA is not available.")
+        
+        if speedup < 1:
+            print("\nWARNING: GPU is slower than CPU! This indicates a serious configuration issue.")
+            print("Potential issues to check:")
+            print("1. Ensure PyTorch is built with the correct CUDA version")
+            print("2. Check for GPU thermal throttling or power limitations")
+            print("3. Verify that no other processes are using the GPU")
+            print("4. Try reinstalling PyTorch with the correct CUDA version for your system")
+        elif speedup > 50:
+            print("\nGPU performance is excellent!")
+        elif speedup > 10:
+            print("\nGPU performance is good.")
+        else:
+            print("\nGPU performance is modest but functional.")
 
     print("\n--- Test Script Completed ---")
 
 if __name__ == "__main__":
-    test_gpu_cuda()
+    test_gpu_cuda_fixed()

@@ -91,6 +91,8 @@ spec:
         args:
         - clone
         - --single-branch
+        - -b
+        - fix-training-permissions
         - https://gitlab.nrp-nautilus.io/timothy.sereda/BraTS-CycleGAN-SwinUNETR # Update this URL to your repository
         - /opt/repo/BraTS-CycleGAN-SwinUNETR # Corrected clone target path to match REPO_PATH!
         volumeMounts:
