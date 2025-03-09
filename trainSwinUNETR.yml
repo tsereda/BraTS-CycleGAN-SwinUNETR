@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: brats-seg # Customize this name (e.g., brats-seg-training-run-1)
+  name: brats-seg2 # Customize this name (e.g., brats-seg-training-run-1)
 
 spec:
   template:

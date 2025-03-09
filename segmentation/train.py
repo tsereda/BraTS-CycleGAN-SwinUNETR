@@ -23,7 +23,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description='BraTS Segmentation Training')
     parser.add_argument('--data_path', type=str, default="processed_data/brats128_split/",
                         help='Path to dataset')
-    parser.add_argument('--output_path', type=str, default="/tmp/output/",
+    parser.add_argument('--output_path', type=str, default="/data/output/",
                         help='Path to save outputs')
     parser.add_argument('--batch_size', type=int, default=1,
                         help='Batch size')
