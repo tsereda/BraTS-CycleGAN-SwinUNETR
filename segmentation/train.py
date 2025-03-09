@@ -224,7 +224,7 @@ if __name__ == "__main__":
         'data_path': "processed_data/brats128_split/",
         'output_path': "/tmp/output/",
         'batch_size': 1,
-        'num_workers': 2,
+        'num_workers': 0,
         'epochs': 100,
         'learning_rate': 1e-4,
         'weight_decay': 1e-5,
