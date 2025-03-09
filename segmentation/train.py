@@ -135,7 +135,7 @@ def validate(model: torch.nn.Module, val_loader: torch.utils.data.DataLoader,
                 val_iou_scores[class_idx].append(iou_scores[class_idx])
             
             # Print progress
-            if (batch_idx + 1) % 10 == 0:
+            if (batch_idx + 1) % 50 == 0:
                 print(f"Validated {batch_idx + 1}/{len(val_loader)} batches")
                 
     # Calculate mean metrics across all batches
@@ -233,7 +233,7 @@ def train_model(
     model = ImprovedSwinUNETR(
         in_channels=4,
         num_classes=4,
-        feature_size=32  # Reduced from 48 to 32 to save memory
+        feature_size=64  # Reduced from 48 to 32 to save memory
     )
     
     model.initialize_weights()
@@ -359,7 +359,7 @@ def train_model(
                     current_memory = torch.cuda.memory_allocated(0) / 1e9
                     max_memory = torch.cuda.max_memory_allocated(0) / 1e9
                     
-                    print(f"Batch {batch_idx+1}/{len(train_loader)}, Loss: {batch_loss:.4f}, "
+                    print(f"Loss: {batch_loss:.4f}, "
                           f"Time: {batch_time:.3f}s, "
                           f"GPU Mem: {current_memory:.2f}/{max_memory:.2f} GB, "
                           f"LR: {optimizer.param_groups[0]['lr']:.6f}")
@@ -411,7 +411,7 @@ def train_model(
         epoch_time = epoch_end_time - epoch_start_time
         
         # Save checkpoint every 5 epochs
-        if (epoch + 1) % 5 == 0 or epoch == epochs - 1:
+        if (epoch + 1) % 50 == 0 or epoch == epochs - 1:
             checkpoint = {
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
