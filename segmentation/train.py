@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Dict, Optional
 import time
 from tqdm import tqdm
+import sys
 
 # Import the fixed loss and model
 from losses import CombinedLoss
@@ -16,7 +17,7 @@ from dataset import get_data_loaders, BraTSDataset
 def train_model(
     data_path: str,
     output_path: str,
-    batch_size: int = 1,
+    batch_size: int = 2,
     num_workers: int = 2,
     epochs: int = 100,
     learning_rate: float = 1e-4,
@@ -125,72 +126,66 @@ def train_model(
         train_loss = 0.0
         batch_count = 0
         
-        # Use tqdm for progress bar
-        with tqdm(total=len(train_loader), desc=f'Epoch {epoch+1}/{epochs}', 
-          mininterval=0.1, disable=False, 
-          bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}') as pbar:
-            # Reset gradients at the beginning of each epoch
-            optimizer.zero_grad()
+        # Force tqdm to use a basic progress bar that works in all environments
+        print(f"Epoch {epoch+1}/{epochs}")
+        
+        # Reset gradients at the beginning of each epoch
+        optimizer.zero_grad()
+        
+        for batch_idx, (images, targets) in enumerate(train_loader):
+            # Move data to device
+            images, targets = images.to(device), targets.to(device)
             
-            for batch_idx, (images, targets) in enumerate(train_loader):
-                # Move data to device
-                images, targets = images.to(device), targets.to(device)
-                
-                # Print data shapes and ranges for debugging
-                # if batch_idx == 0:
-                #     print(f"Image shape: {tuple(images.shape[2:])}, range: {images.min().item():.4f} to {images.max().item():.4f}")
-                #     print(f"Mask shape: {tuple(targets.shape)}, unique values: {torch.unique(targets).cpu().numpy()}")
-                
-                # Forward pass with mixed precision if enabled
-                if use_mixed_precision:
-                    with torch.amp.autocast("cuda"):
-                        outputs = model(images)
-                        loss = loss_fn(outputs, targets) / gradient_accumulation_steps
-                    
-                    # Backward pass with scaler
-                    scaler.scale(loss).backward()
-                    
-                    # Update weights if we've accumulated enough gradients
-                    if (batch_idx + 1) % gradient_accumulation_steps == 0:
-                        # Gradient clipping
-                        scaler.unscale_(optimizer)
-                        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                        print(f"Gradient norm: {grad_norm:.6f}")
-                        
-                        # Update weights
-                        scaler.step(optimizer)
-                        scaler.update()
-                        optimizer.zero_grad()
-                else:
-                    # Standard forward pass
+            # Print data shapes and ranges for debugging
+            # print(f"Image shape: {tuple(images.shape[2:])}, range: {images.min().item():.4f} to {images.max().item():.4f}")
+            
+            # Forward pass with mixed precision if enabled
+            if use_mixed_precision:
+                with torch.amp.autocast("cuda"):
                     outputs = model(images)
                     loss = loss_fn(outputs, targets) / gradient_accumulation_steps
-                    loss.backward()
+                
+                # Backward pass with scaler
+                scaler.scale(loss).backward()
+                
+                # Update weights if we've accumulated enough gradients
+                if (batch_idx + 1) % gradient_accumulation_steps == 0:
+                    # Gradient clipping
+                    scaler.unscale_(optimizer)
+                    grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                    print(f"Gradient norm: {grad_norm:.6f}")
                     
-                    # Update weights if we've accumulated enough gradients
-                    if (batch_idx + 1) % gradient_accumulation_steps == 0:
-                        # Gradient clipping
-                        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                        print(f"Gradient norm: {grad_norm:.6f}")
-                        
-                        # Update weights
-                        optimizer.step()
-                        optimizer.zero_grad()
+                    # Update weights
+                    scaler.step(optimizer)
+                    scaler.update()
+                    optimizer.zero_grad()
+            else:
+                # Standard forward pass
+                outputs = model(images)
+                loss = loss_fn(outputs, targets) / gradient_accumulation_steps
+                loss.backward()
                 
-                # Update running loss (use the scaled loss value)
-                batch_loss = loss.item() * gradient_accumulation_steps  # Rescale for reporting
-                train_loss += batch_loss
-                batch_count += 1
+                # Update weights if we've accumulated enough gradients
+                if (batch_idx + 1) % gradient_accumulation_steps == 0:
+                    # Gradient clipping
+                    grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                    print(f"Gradient norm: {grad_norm:.6f}")
+                    
+                    # Update weights
+                    optimizer.step()
+                    optimizer.zero_grad()
+            
+            # Update running loss (use the scaled loss value)
+            batch_loss = loss.item() * gradient_accumulation_steps  # Rescale for reporting
+            train_loss += batch_loss
+            batch_count += 1
+            
+            # Print progress explicitly instead of using tqdm
+            if (batch_idx + 1) % 10 == 0 or batch_idx == 0:  # Print more frequently
+                print(f"Batch {batch_idx+1}/{len(train_loader)}, Loss: {batch_loss:.4f}, LR: {optimizer.param_groups[0]['lr']:.6f}")
                 
-                # Update progress bar
-                pbar.set_postfix({
-                    'loss': f'{batch_loss:.4f}',
-                    'lr': f'{optimizer.param_groups[0]["lr"]:.6f}'
-                })
-                pbar.update()
-
-                if (batch_idx + 1) % 10 == 0:  # Print every 10 batches
-                    print(f"\nBatch {batch_idx+1}/{len(train_loader)}, Loss: {batch_loss:.4f}")
+            # Ensure output is flushed immediately in containerized environments
+            sys.stdout.flush()
         
         # Update scheduler
         scheduler.step()
@@ -210,9 +205,10 @@ def train_model(
             print(f"Checkpoint saved to {output_path / f'model_epoch_{epoch+1}.pth'}")
         
         # Print epoch results
-        print(f"\nEpoch {epoch+1}/{epochs}:")
+        print(f"\nEpoch {epoch+1}/{epochs} Summary:")
         print(f"  Train Loss: {train_loss:.4f}")
         print(f"  Learning Rate: {optimizer.param_groups[0]['lr']:.6f}")
+        sys.stdout.flush()
     
     print("\n=== Training Complete ===")
     return model

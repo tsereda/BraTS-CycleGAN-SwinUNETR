@@ -131,9 +131,9 @@ class CombinedLoss(nn.Module):
         total_loss = self.dice_weight * dice + self.focal_weight * focal
         
         # Print diagnostic information
-        print(f"Dice loss: {dice.item()}, Focal loss: {focal.item()}")
+        #print(f"Dice loss: {dice.item()}, Focal loss: {focal.item()}")
         #print(f"Total loss before clamping: {total_loss.item()}")
-        print(f"Raw loss: {total_loss.item()}, min: {logits.min().item()}, max: {logits.max().item()}")
+        #print(f"Raw loss: {total_loss.item()}, min: {logits.min().item()}, max: {logits.max().item()}")
         
         # Ensure the total loss is not negative
         total_loss = torch.clamp(total_loss, min=0.0)

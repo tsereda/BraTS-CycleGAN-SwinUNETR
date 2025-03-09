@@ -63,11 +63,11 @@ spec:
           limits:
             memory: 36Gi
             cpu: "12"
-            nvidia.com/a100: "1"
+            nvidia.com/a100: "2"
           requests:
             memory: 30Gi
             cpu: "10"
-            nvidia.com/a100: "1"
+            nvidia.com/a100: "2"
 
       initContainers: # Init containers run before the main container
       - name: volume-permissions # Init container to set volume permissions

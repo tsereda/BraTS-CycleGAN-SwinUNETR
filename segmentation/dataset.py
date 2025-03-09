@@ -122,7 +122,7 @@ class BraTSDataset(Dataset):
             mask = np.load(mask_path)
             
             # Debug information about data
-            print(f"Image shape: {img.shape}, range: {img.min():.4f} to {img.max():.4f}")
+            # print(f"Image shape: {img.shape}, range: {img.min():.4f} to {img.max():.4f}")
             #unique_mask_values = np.unique(mask)
             #print(f"Mask shape: {mask.shape}, unique values: {unique_mask_values}")
         
