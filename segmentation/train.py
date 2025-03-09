@@ -245,7 +245,7 @@ def train_model(
     print(f"Trainable parameters: {trainable_params:,}")
     
     # Use fixed CombinedLoss with equal class weights
-    class_weights = torch.tensor([0.25, 0.25, 0.25, 0.25]).to(device)
+    class_weights = torch.tensor([0.13, 0.36, 0.24, 0.27]).to(device)
     loss_fn = CombinedLoss(
         dice_weight=0.5,
         focal_weight=0.5,
