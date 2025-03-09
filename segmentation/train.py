@@ -19,22 +19,23 @@ from dataset import get_data_loaders, BraTSDataset
 def train_model(
     data_path: str,
     output_path: str,
-    batch_size: int = 1,
-    num_workers: int = 2,
+    batch_size: int = 2,  # Increased from 1 to 2
+    num_workers: int = 4,  # Increased from 0 to 4
     epochs: int = 100,
     learning_rate: float = 1e-4,
     weight_decay: float = 1e-5,
     use_mixed_precision: bool = True,
-    gradient_accumulation_steps: int = 4,  # Increased for stability
-    resume_from: Optional[str] = None
+    gradient_accumulation_steps: int = 1,  # Reduced from 4 to 1 for A100
+    resume_from: Optional[str] = None,
+    benchmark_mode: bool = True  # Enable cuDNN benchmarking
 ):
     """
-    Main training function with improved stability
+    Optimized training function for A100 GPUs
     
     Args:
         data_path: Path to dataset
         output_path: Path to save outputs
-        batch_size: Batch size
+        batch_size: Batch size (increased for A100)
         num_workers: Number of workers for data loading
         epochs: Number of epochs
         learning_rate: Learning rate
@@ -42,13 +43,21 @@ def train_model(
         use_mixed_precision: Whether to use mixed precision training
         gradient_accumulation_steps: Number of steps to accumulate gradients
         resume_from: Path to checkpoint to resume from
+        benchmark_mode: Enable cuDNN benchmarking for optimized performance
     """
     # Create output directory
     output_path = Path(output_path)
     output_path.mkdir(parents=True, exist_ok=True)
     
-    # Set device
+    # Set device and optimization flags
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
+    # Enable cuDNN benchmarking and deterministic algorithms for A100
+    if benchmark_mode and torch.cuda.is_available():
+        torch.backends.cudnn.benchmark = True
+        torch.backends.cudnn.deterministic = False
+        print("cuDNN benchmark mode enabled for optimized performance")
+    
     print(f"Using device: {device}")
     
     # Print GPU information
@@ -65,16 +74,21 @@ def train_model(
         # Reset max memory stats
         torch.cuda.reset_peak_memory_stats()
         
-        # Check compute capability for A100 (compute capability 8.0)
+        # Check if Tensor Cores can be utilized (A100 has compute capability 8.0)
         if hasattr(torch.cuda, 'get_device_capability'):
             capability = torch.cuda.get_device_capability(0)
             print(f"CUDA Compute Capability: {capability[0]}.{capability[1]}")
             if capability[0] >= 8:
                 print("GPU supports Tensor Cores (A100 or newer)")
+                print("Optimizing for Tensor Core operations...")
+                
+                # Set tensor core optimization flags for PyTorch
+                torch.set_float32_matmul_precision('high')
+                print("Tensor Core optimization enabled (float32_matmul_precision=high)")
             
-        # Run a quick benchmark
+        # Run a quick benchmark with larger tensors for A100
         print("\n--- Running quick GPU benchmark ---")
-        benchmark_tensor_size = 5000
+        benchmark_tensor_size = 8192  # Larger for A100
         start_time = time.time()
         x = torch.randn(benchmark_tensor_size, benchmark_tensor_size, device=device)
         y = torch.randn(benchmark_tensor_size, benchmark_tensor_size, device=device)
@@ -88,11 +102,14 @@ def train_model(
         torch.cuda.empty_cache()
         gc.collect()
     
-    # Get data loaders
+    # Enable prefetch for DataLoader (better data loading utilization)
+    torch.multiprocessing.set_sharing_strategy('file_system')
+    
+    # Get data loaders with optimized settings
     train_loader, val_loader = get_data_loaders(
         data_path=data_path,
         batch_size=batch_size,
-        num_workers=num_workers,
+        num_workers=num_workers,  # Use more workers for A100
         use_augmentation=True,
         debug=True  # Enable debug mode for the dataset
     )
@@ -101,7 +118,7 @@ def train_model(
     model = ImprovedSwinUNETR(
         in_channels=4,
         num_classes=4,
-        feature_size=32  # Reduced feature size for stability
+        feature_size=48  # Increased feature size for A100
     )
     
     model.initialize_weights()
@@ -121,22 +138,25 @@ def train_model(
         class_weights=class_weights
     )
     
-    # Optimizer with gradient clipping
+    # Optimizer with gradient clipping - use more advanced optimizer settings
     optimizer = optim.AdamW(
         model.parameters(),
         lr=learning_rate,
-        weight_decay=weight_decay
+        weight_decay=weight_decay,
+        betas=(0.9, 0.999),  # Default betas
+        eps=1e-8,           # Default epsilon
+        amsgrad=False       # Don't use AMSGrad variant
     )
     
-    # Learning rate scheduler - use simpler step scheduler
-    scheduler = optim.lr_scheduler.StepLR(
+    # Learning rate scheduler - use cosine annealing for better convergence
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(
         optimizer,
-        step_size=20,  # Reduce LR every 20 epochs
-        gamma=0.5      # Reduce to 50% each time
+        T_max=epochs,
+        eta_min=learning_rate * 0.01
     )
     
     # Gradient scaler for mixed precision
-    scaler = torch.amp.GradScaler() if use_mixed_precision else None
+    scaler = torch.amp.GradScaler(enabled=use_mixed_precision)
     
     # Resume from checkpoint if specified
     start_epoch = 0
@@ -168,78 +188,76 @@ def train_model(
         train_loss = 0.0
         batch_count = 0
         
-        # Force tqdm to use a basic progress bar that works in all environments
+        # Print epoch information
         print(f"Epoch {epoch+1}/{epochs} started at {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         
         # Reset gradients at the beginning of each epoch
-        optimizer.zero_grad()
+        optimizer.zero_grad(set_to_none=True)  # More efficient than setting to zero
         
         # Timing stats for this epoch
         epoch_batch_times = []
         epoch_forward_times = []
         epoch_backward_times = []
         
+        # For first epoch, warm up the GPU with a few batches
+        if epoch == 0:
+            print("Warming up GPU with initial batches...")
+            # Get a sample batch
+            for sample_batch in train_loader:
+                if isinstance(sample_batch, (list, tuple)):
+                    sample_images, sample_targets = sample_batch
+                    sample_images, sample_targets = sample_images.to(device), sample_targets.to(device)
+                    # Run a forward and backward pass to initialize CUDA kernels
+                    with torch.amp.autocast(device_type="cuda", enabled=use_mixed_precision):
+                        outputs = model(sample_images)
+                        loss = loss_fn(outputs, sample_targets)
+                    scaler.scale(loss).backward()
+                    scaler.step(optimizer)
+                    scaler.update()
+                    optimizer.zero_grad(set_to_none=True)
+                    # Clear from memory
+                    del sample_images, sample_targets, outputs, loss
+                    torch.cuda.empty_cache()
+                    # Only need one batch for warmup
+                    break
+            
+            print("GPU warmup completed")
+        
         for batch_idx, (images, targets) in enumerate(train_loader):
             batch_start_time = time.time()
             
             # Move data to device
-            images, targets = images.to(device), targets.to(device)
+            images, targets = images.to(device, non_blocking=True), targets.to(device, non_blocking=True)
             
             # Forward pass with mixed precision if enabled
             forward_start_time = time.time()
-            if use_mixed_precision:
-                with torch.amp.autocast("cuda"):
-                    outputs = model(images)
-                    loss = loss_fn(outputs, targets) / gradient_accumulation_steps
-                
-                forward_end_time = time.time()
-                forward_time = forward_end_time - forward_start_time
-                epoch_forward_times.append(forward_time)
-                
-                # Backward pass with scaler
-                backward_start_time = time.time()
-                scaler.scale(loss).backward()
-                
-                # Update weights if we've accumulated enough gradients
-                if (batch_idx + 1) % gradient_accumulation_steps == 0:
-                    # Gradient clipping
-                    scaler.unscale_(optimizer)
-                    grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                    
-                    # Update weights
-                    scaler.step(optimizer)
-                    scaler.update()
-                    optimizer.zero_grad()
-                
-                backward_end_time = time.time()
-                backward_time = backward_end_time - backward_start_time
-                epoch_backward_times.append(backward_time)
-                
-            else:
-                # Standard forward pass
+            
+            with torch.amp.autocast(device_type="cuda", enabled=use_mixed_precision):
                 outputs = model(images)
                 loss = loss_fn(outputs, targets) / gradient_accumulation_steps
+            
+            forward_end_time = time.time()
+            forward_time = forward_end_time - forward_start_time
+            epoch_forward_times.append(forward_time)
+            
+            # Backward pass with scaler
+            backward_start_time = time.time()
+            scaler.scale(loss).backward()
+            
+            # Update weights if we've accumulated enough gradients
+            if (batch_idx + 1) % gradient_accumulation_steps == 0:
+                # Gradient clipping
+                scaler.unscale_(optimizer)
+                grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 
-                forward_end_time = time.time()
-                forward_time = forward_end_time - forward_start_time
-                epoch_forward_times.append(forward_time)
-                
-                # Backward pass
-                backward_start_time = time.time()
-                loss.backward()
-                
-                # Update weights if we've accumulated enough gradients
-                if (batch_idx + 1) % gradient_accumulation_steps == 0:
-                    # Gradient clipping
-                    grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                    
-                    # Update weights
-                    optimizer.step()
-                    optimizer.zero_grad()
-                
-                backward_end_time = time.time()
-                backward_time = backward_end_time - backward_start_time
-                epoch_backward_times.append(backward_time)
+                # Update weights
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad(set_to_none=True)  # More efficient
+            
+            backward_end_time = time.time()
+            backward_time = backward_end_time - backward_start_time
+            epoch_backward_times.append(backward_time)
             
             # Update running loss (use the scaled loss value)
             batch_loss = loss.item() * gradient_accumulation_steps  # Rescale for reporting
@@ -250,6 +268,9 @@ def train_model(
             batch_end_time = time.time()
             batch_time = batch_end_time - batch_start_time
             epoch_batch_times.append(batch_time)
+            
+            # Clear unnecessary tensor memory
+            del outputs
             
             # Print progress explicitly instead of using tqdm
             if (batch_idx + 1) % 10 == 0 or batch_idx == 0:  # Print more frequently
@@ -331,7 +352,7 @@ def train_model(
 
 
 def diagnose_gpu_performance():
-    """Run a series of tests to diagnose GPU performance issues"""
+    """Run more comprehensive tests to diagnose GPU performance issues"""
     if not torch.cuda.is_available():
         print("CUDA not available. Cannot diagnose GPU performance.")
         return
@@ -343,13 +364,16 @@ def diagnose_gpu_performance():
     print(f"CUDA Version: {torch.version.cuda}")
     print(f"PyTorch Version: {torch.__version__}")
     
-    # Check compute capability
+    # Enable tensor core optimizations for A100
     if hasattr(torch.cuda, 'get_device_capability'):
         capability = torch.cuda.get_device_capability(0)
         print(f"CUDA Compute Capability: {capability[0]}.{capability[1]}")
+        if capability[0] >= 8:  # A100 has compute capability 8.0
+            torch.set_float32_matmul_precision('high')
+            print("Enabled Tensor Core optimizations")
     
-    # Test matrix multiplication (CPU vs GPU)
-    sizes = [1000, 2000, 4000]
+    # Test matrix multiplication (CPU vs GPU) with various sizes
+    sizes = [1000, 2000, 4000, 8192]  # Added larger size for A100
     
     for size in sizes:
         print(f"\nTesting matrix multiplication ({size}x{size}):")
@@ -371,17 +395,34 @@ def diagnose_gpu_performance():
         _ = torch.matmul(a_gpu, b_gpu)
         torch.cuda.synchronize()
         
+        # Test with default precision
         gpu_start = time.time()
         _ = torch.matmul(a_gpu, b_gpu)
         torch.cuda.synchronize()
         gpu_end = time.time()
         gpu_time = gpu_end - gpu_start
         
-        speedup = cpu_time / gpu_time
-        
-        print(f"  CPU Time: {cpu_time:.4f}s")
-        print(f"  GPU Time: {gpu_time:.4f}s")
-        print(f"  Speedup: {speedup:.1f}x")
+        # Test with mixed precision (FP16) if on A100
+        if hasattr(torch.cuda, 'get_device_capability') and torch.cuda.get_device_capability(0)[0] >= 8:
+            with torch.amp.autocast(device_type='cuda'):
+                torch.cuda.synchronize()
+                gpu_fp16_start = time.time()
+                _ = torch.matmul(a_gpu, b_gpu)
+                torch.cuda.synchronize()
+                gpu_fp16_end = time.time()
+            gpu_fp16_time = gpu_fp16_end - gpu_fp16_start
+            
+            print(f"  CPU Time: {cpu_time:.4f}s")
+            print(f"  GPU Time (FP32): {gpu_time:.4f}s")
+            print(f"  GPU Time (FP16): {gpu_fp16_time:.4f}s")
+            print(f"  Speedup vs CPU (FP32): {cpu_time / gpu_time:.1f}x")
+            print(f"  Speedup vs CPU (FP16): {cpu_time / gpu_fp16_time:.1f}x")
+            print(f"  FP16 vs FP32 Speedup: {gpu_time / gpu_fp16_time:.1f}x")
+        else:
+            speedup = cpu_time / gpu_time
+            print(f"  CPU Time: {cpu_time:.4f}s")
+            print(f"  GPU Time: {gpu_time:.4f}s")
+            print(f"  Speedup: {speedup:.1f}x")
         
         # Clean up
         del a_cpu, b_cpu, a_gpu, b_gpu, _
@@ -389,7 +430,7 @@ def diagnose_gpu_performance():
     
     # Test memory bandwidth
     print("\nTesting memory bandwidth:")
-    tensor_size = 10000000  # 10M elements
+    tensor_size = 50000000  # 50M elements for A100 (was 10M)
     
     # Create large tensor
     x_gpu = torch.randn(tensor_size, device='cuda')
@@ -415,9 +456,58 @@ def diagnose_gpu_performance():
     bandwidth = bytes_processed / elapsed / (1024 ** 3)  # Convert to GB/s
     
     print(f"  Memory Bandwidth: {bandwidth:.2f} GB/s")
+    theoretical_max = 1935  # A100 has ~1935 GB/s theoretical bandwidth
+    print(f"  Theoretical Max Bandwidth: ~{theoretical_max} GB/s")
+    print(f"  Efficiency: {(bandwidth/theoretical_max)*100:.1f}%")
     
     # Clean up
     del x_gpu, y_gpu, _
+    torch.cuda.empty_cache()
+    
+    # Test cuDNN benchmark mode impact
+    print("\nTesting cuDNN benchmark mode impact:")
+    
+    # Create test tensors
+    input_tensor = torch.randn(8, 64, 64, 64, 64, device='cuda')  # B, C, D, H, W
+    conv3d = torch.nn.Conv3d(64, 64, kernel_size=3, padding=1).cuda()
+    
+    # Test without benchmark
+    torch.backends.cudnn.benchmark = False
+    
+    # Warmup
+    _ = conv3d(input_tensor)
+    torch.cuda.synchronize()
+    
+    # Measure
+    trials = 10
+    start = time.time()
+    for _ in range(trials):
+        _ = conv3d(input_tensor)
+    torch.cuda.synchronize()
+    end = time.time()
+    time_no_benchmark = (end - start) / trials
+    
+    # Test with benchmark
+    torch.backends.cudnn.benchmark = True
+    
+    # Warmup again with benchmark enabled
+    _ = conv3d(input_tensor)
+    torch.cuda.synchronize()
+    
+    # Measure
+    start = time.time()
+    for _ in range(trials):
+        _ = conv3d(input_tensor)
+    torch.cuda.synchronize()
+    end = time.time()
+    time_with_benchmark = (end - start) / trials
+    
+    print(f"  Conv3D without benchmark: {time_no_benchmark:.4f}s")
+    print(f"  Conv3D with benchmark: {time_with_benchmark:.4f}s")
+    print(f"  Speedup from benchmark: {time_no_benchmark / time_with_benchmark:.2f}x")
+    
+    # Clean up
+    del input_tensor, conv3d, _
     torch.cuda.empty_cache()
     
     print("\nGPU Performance Diagnostics Complete")
@@ -432,18 +522,19 @@ if __name__ == "__main__":
     # Run diagnostics first
     diagnose_gpu_performance()
     
-    # Configuration
+    # Configuration for A100 GPU
     config = {
         'data_path': "processed_data/brats128_split/",
         'output_path': "/tmp/output/",
-        'batch_size': 1,
-        'num_workers': 0,
+        'batch_size': 2,        # Increased batch size
+        'num_workers': 4,       # Increased workers
         'epochs': 100,
         'learning_rate': 1e-4,
         'weight_decay': 1e-5,
         'use_mixed_precision': True,
-        'gradient_accumulation_steps': 4,
-        'resume_from': None
+        'gradient_accumulation_steps': 1,  # Reduced for A100
+        'resume_from': None,
+        'benchmark_mode': True  # Enable cuDNN benchmarking
     }
     
     # Train model
