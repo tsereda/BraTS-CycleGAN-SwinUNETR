@@ -18,7 +18,7 @@ class PatchEmbed3D(nn.Module):
         self,
         patch_size: Tuple[int, int, int] = (2, 2, 2),
         in_channels: int = 4,
-        embed_dim: int = 48,
+        embed_dim: int = 64,
         norm_layer: nn.Module = None
     ):
         super().__init__()
