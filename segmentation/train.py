@@ -222,7 +222,7 @@ if __name__ == "__main__":
     # Configuration
     config = {
         'data_path': "processed_data/brats128_split/",
-        'output_path': "/data/output/",
+        'output_path': "./output/",
         'batch_size': 1,
         'num_workers': 2,
         'epochs': 100,
