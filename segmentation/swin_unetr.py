@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-from typing import Tuple, List
+from typing import Tuple, List, Optional
 
 
 class PatchEmbed3D(nn.Module):
