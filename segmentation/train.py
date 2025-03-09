@@ -16,6 +16,7 @@ import numpy as np
 from losses import CombinedLoss
 from swin_unetr import ImprovedSwinUNETR
 from dataset import get_data_loaders, BraTSDataset
+from torch.optim.lr_scheduler import OneCycleLR
 
 
 def parse_args():
@@ -23,7 +24,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description='BraTS Segmentation Training')
     parser.add_argument('--data_path', type=str, default="processed_data/brats128_split/",
                         help='Path to dataset')
-    parser.add_argument('--output_path', type=str, default="/data/output/",
+    parser.add_argument('--output_path', type=str, default="output/",
                         help='Path to save outputs')
     parser.add_argument('--batch_size', type=int, default=1,
                         help='Batch size')
@@ -245,7 +246,7 @@ def train_model(
     print(f"Trainable parameters: {trainable_params:,}")
     
     # Use fixed CombinedLoss with equal class weights
-    class_weights = torch.tensor([0.13, 0.36, 0.24, 0.27]).to(device)
+    class_weights = torch.tensor([0.1, 0.45, 0.2, 0.25]).to(device)
     loss_fn = CombinedLoss(
         dice_weight=0.5,
         focal_weight=0.5,
@@ -263,10 +264,14 @@ def train_model(
     )
     
     # Learning rate scheduler - use cosine annealing for better convergence
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(
+    scheduler = OneCycleLR(
         optimizer,
-        T_max=epochs,
-        eta_min=learning_rate * 0.01
+        max_lr=learning_rate * 5,  # Peak LR 5x initial LR
+        steps_per_epoch=len(train_loader) // gradient_accumulation_steps,
+        epochs=epochs,
+        pct_start=0.3,  # Spend 30% of time warming up
+        div_factor=25,   # Initial LR is max_lr/25
+        final_div_factor=10000  # Final LR is max_lr/10000
     )
     
     # Gradient scaler for mixed precision

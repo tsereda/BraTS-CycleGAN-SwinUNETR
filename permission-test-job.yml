@@ -1,0 +1,153 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: brats-permission-test
+spec:
+  template:
+    spec:
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 100
+        fsGroup: 100
+      containers:
+      - name: permission-test
+        image: gitlab-registry.nrp-nautilus.io/prp/jupyter-stack/prp
+        command:
+        - "bash"
+        - "-c"
+        args:
+        - |
+          # Show who we're running as
+          echo "Running as:"
+          id
+          
+          # Check and create output directory with proper permissions
+          echo "Creating output directory with proper permissions"
+          mkdir -p /data/output
+          chmod 777 /data/output
+          ls -la /data
+          
+          # Create and run the permission test script
+          echo "Creating and running permission test script"
+          cat > /tmp/permission_test.py << 'EOF'
+          #!/usr/bin/env python3
+          import os
+          import sys
+          import subprocess
+
+          def run_cmd(cmd):
+              """Run a command and return the output"""
+              print(f"Running: {cmd}")
+              try:
+                  result = subprocess.run(cmd, shell=True, check=False, 
+                                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, 
+                                         universal_newlines=True)
+                  print(f"Return code: {result.returncode}")
+                  if result.stdout:
+                      print(f"STDOUT:\n{result.stdout}")
+                  if result.stderr:
+                      print(f"STDERR:\n{result.stderr}")
+                  return result
+              except Exception as e:
+                  print(f"Error executing command: {e}")
+                  return None
+
+          def check_directory(directory):
+              """Check if a directory exists and is writable"""
+              print(f"\n=== Checking directory: {directory} ===")
+              
+              # Check if directory exists
+              if os.path.exists(directory):
+                  print(f"Directory exists: {directory}")
+              else:
+                  print(f"Directory does not exist: {directory}")
+                  try:
+                      print(f"Attempting to create directory: {directory}")
+                      os.makedirs(directory, exist_ok=True)
+                      print(f"Successfully created directory: {directory}")
+                  except Exception as e:
+                      print(f"Failed to create directory: {e}")
+              
+              # Check directory permissions
+              try:
+                  stats = os.stat(directory)
+                  print(f"Owner: UID={stats.st_uid}, GID={stats.st_gid}")
+                  print(f"Permissions: {oct(stats.st_mode)}")
+              except Exception as e:
+                  print(f"Could not stat directory: {e}")
+              
+              # Try to create a test file
+              test_file = os.path.join(directory, "test_file.txt")
+              try:
+                  with open(test_file, 'w') as f:
+                      f.write("This is a test file to check write permissions.")
+                  print(f"Successfully created test file: {test_file}")
+                  
+                  # Try to read the file back
+                  with open(test_file, 'r') as f:
+                      content = f.read()
+                  print(f"Successfully read test file. Content length: {len(content)}")
+                  
+                  # Try to remove the file
+                  os.remove(test_file)
+                  print(f"Successfully removed test file: {test_file}")
+              except Exception as e:
+                  print(f"Error with test file operations: {e}")
+
+          def main():
+              print("=== Permission Test Script ===")
+              
+              # Print current user and group information
+              print("\n=== User Information ===")
+              run_cmd("id")
+              
+              # Print current directory
+              print("\n=== Current Directory ===")
+              print(f"Current working directory: {os.getcwd()}")
+              run_cmd("ls -la")
+              
+              # Check important directories
+              directories_to_check = [
+                  "/data",
+                  "/data/output",
+                  "/opt/repo",
+                  "/conda-envs"
+              ]
+              
+              for directory in directories_to_check:
+                  check_directory(directory)
+              
+              # Print additional directory information
+              print("\n=== Detailed directory permissions ===")
+              run_cmd("find /data -type d -exec ls -ld {} \\;")
+              
+              print("\n=== Test Complete ===")
+
+          if __name__ == "__main__":
+              main()
+          EOF
+          
+          python /tmp/permission_test.py
+          
+          # Try to manually create a file in the output directory
+          echo "Manual file creation test"
+          touch /data/output/test_from_shell.txt
+          echo "Something" > /data/output/test_from_shell.txt
+          cat /data/output/test_from_shell.txt
+
+        volumeMounts:
+        - name: brats-data-volume
+          mountPath: /data
+        resources:
+          limits:
+            memory: 1200Mi
+            cpu: "1.2"
+          requests:
+            memory: 1000Mi
+            cpu: "1"
+      volumes:
+      - name: brats-data-volume
+        persistentVolumeClaim:
+          claimName: brats-data
+      restartPolicy: Never
+  backoffLimit: 0

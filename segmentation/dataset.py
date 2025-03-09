@@ -5,7 +5,10 @@ from torch.utils.data import Dataset, DataLoader
 from pathlib import Path
 from typing import Tuple, List, Dict, Optional, Callable, Any
 import random
+import torch.nn.functional as F
 
+# Import the simplified ElasticDeformation class
+from elastic_deformation import SimplifiedElasticDeformation
 
 # Define worker initialization function first
 def worker_init_fn(worker_id):
@@ -175,8 +178,9 @@ def get_transforms(mode: str) -> Optional[Callable]:
     if mode == 'train':
         return Compose([
             RandomFlip3D(axes=(0, 1, 2), p=0.5),
-            RandomIntensityShift(shift_range=(-0.1, 0.1), p=0.3),
-            RandomGaussianNoise(std_range=(0, 0.03), p=0.2)
+            SimplifiedElasticDeformation(alpha=15.0, p=0.3),  # Using simplified version
+            RandomIntensityShift(shift_range=(-0.15, 0.15), p=0.4),
+            RandomGaussianNoise(std_range=(0, 0.04), p=0.3)
         ])
     else:
         # No transforms for validation
