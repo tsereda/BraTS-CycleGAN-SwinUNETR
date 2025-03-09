@@ -315,7 +315,7 @@ def train(d_model_A, d_model_B, g_model_AtoB, g_model_BtoA,
 # Main Execution
 if __name__ == '__main__':
     # Update these paths to match your system
-    complete_data_dir = '/data/processed_data/brats128_cyclegan/images/'
+    complete_data_dir = 'processed_data/brats128_cyclegan/images/'
     
     # Domain A: Complete data (simulate_dropout = False)
     dataset_A = PreprocessedDataset(complete_data_dir, simulate_dropout=False)
