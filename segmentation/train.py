@@ -3,13 +3,14 @@ import torch
 import torch.optim as optim
 from torch.cuda.amp import GradScaler, autocast
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, List, Tuple
 import time
 import datetime
 from tqdm import tqdm
 import sys
 import gc
 import argparse
+import numpy as np
 
 # Import the fixed loss and model
 from losses import CombinedLoss
@@ -40,6 +41,119 @@ def parse_args():
                         help='Path to checkpoint to resume from')
     
     return parser.parse_args()
+
+
+def calculate_metrics(predictions: torch.Tensor, targets: torch.Tensor, 
+                      num_classes: int = 4) -> Tuple[List[float], List[float]]:
+    """
+    Calculate per-class Dice and MIoU metrics
+    
+    Args:
+        predictions: Tensor of shape [B, C, D, H, W] with class logits
+        targets: Tensor of shape [B, D, H, W] with class indices
+        num_classes: Number of classes including background
+        
+    Returns:
+        tuple containing:
+            - dice_scores: List of Dice scores for each class
+            - miou_scores: List of MIoU scores for each class
+    """
+    # Move to CPU and convert to numpy for metrics calculation
+    if predictions.is_cuda:
+        predictions = predictions.detach().cpu()
+    if targets.is_cuda:
+        targets = targets.detach().cpu()
+    
+    # Get predictions by taking the argmax
+    predictions = torch.argmax(predictions, dim=1)
+    
+    batch_size = predictions.shape[0]
+    dice_scores = [0.0] * num_classes
+    iou_scores = [0.0] * num_classes
+    
+    # Calculate metrics for each class
+    for class_idx in range(num_classes):
+        # Create binary masks for the current class
+        pred_mask = (predictions == class_idx).float()
+        target_mask = (targets == class_idx).float()
+        
+        # Calculate intersection and union
+        intersection = torch.sum(pred_mask * target_mask, dim=(1, 2, 3))
+        pred_sum = torch.sum(pred_mask, dim=(1, 2, 3))
+        target_sum = torch.sum(target_mask, dim=(1, 2, 3))
+        union = pred_sum + target_sum - intersection
+        
+        # Calculate Dice score: 2*intersection / (pred_sum + target_sum)
+        # Add small constant to avoid division by zero
+        dice_batch = (2.0 * intersection + 1e-5) / (pred_sum + target_sum + 1e-5)
+        
+        # Calculate IoU: intersection / union
+        iou_batch = (intersection + 1e-5) / (union + 1e-5)
+        
+        # Average over the batch
+        dice_scores[class_idx] = dice_batch.mean().item()
+        iou_scores[class_idx] = iou_batch.mean().item()
+    
+    return dice_scores, iou_scores
+
+
+def validate(model: torch.nn.Module, val_loader: torch.utils.data.DataLoader, 
+             device: torch.device, num_classes: int = 4) -> Dict:
+    """
+    Validate the model on the validation set
+    
+    Args:
+        model: The model to validate
+        val_loader: DataLoader for validation data
+        device: Device to run validation on
+        num_classes: Number of classes including background
+        
+    Returns:
+        Dict with validation metrics
+    """
+    model.eval()
+    val_dice_scores = [[] for _ in range(num_classes)]
+    val_iou_scores = [[] for _ in range(num_classes)]
+    
+    print("Starting validation...")
+    
+    with torch.no_grad():
+        for batch_idx, (images, targets) in enumerate(val_loader):
+            # Move data to device
+            images, targets = images.to(device), targets.to(device)
+            
+            # Forward pass
+            outputs = model(images)
+            
+            # Calculate metrics
+            dice_scores, iou_scores = calculate_metrics(outputs, targets, num_classes)
+            
+            # Append batch metrics to lists
+            for class_idx in range(num_classes):
+                val_dice_scores[class_idx].append(dice_scores[class_idx])
+                val_iou_scores[class_idx].append(iou_scores[class_idx])
+            
+            # Print progress
+            if (batch_idx + 1) % 10 == 0:
+                print(f"Validated {batch_idx + 1}/{len(val_loader)} batches")
+                
+    # Calculate mean metrics across all batches
+    mean_dice = [sum(scores) / max(len(scores), 1) for scores in val_dice_scores]
+    mean_iou = [sum(scores) / max(len(scores), 1) for scores in val_iou_scores]
+    
+    # Calculate mean across all classes
+    overall_dice = sum(mean_dice) / len(mean_dice)
+    overall_miou = sum(mean_iou) / len(mean_iou)
+    
+    # Prepare metrics dictionary
+    metrics = {
+        'dice_per_class': mean_dice,
+        'miou_per_class': mean_iou,
+        'overall_dice': overall_dice,
+        'overall_miou': overall_miou
+    }
+    
+    return metrics
 
 
 def train_model(
@@ -171,6 +285,11 @@ def train_model(
         else:
             print(f"Checkpoint {resume_path} not found. Starting from scratch.")
     
+    # Create metrics log file
+    metrics_log_path = output_path / 'metrics.csv'
+    with open(metrics_log_path, 'w') as f:
+        f.write("epoch,train_loss,overall_dice,overall_miou,background_dice,et_dice,tc_dice,wt_dice,background_iou,et_iou,tc_iou,wt_iou\n")
+    
     # Training loop
     print("\n=== Starting Training ===\n")
     
@@ -263,6 +382,25 @@ def train_model(
         if batch_count > 0:
             train_loss /= batch_count
         
+        # Run validation after the first epoch and every 10 epochs
+        validation_metrics = {}
+        if epoch == 0 or (epoch + 1) % 10 == 0 or epoch == epochs - 1:
+            print(f"\nRunning validation after epoch {epoch+1}")
+            validation_metrics = validate(model, val_loader, device)
+            
+            # Print validation metrics
+            print("\nValidation Metrics:")
+            print(f"  Overall Dice Score: {validation_metrics['overall_dice']:.4f}")
+            print(f"  Overall MIoU: {validation_metrics['overall_miou']:.4f}")
+            print("\nDice Scores per Class:")
+            class_names = ["Background", "Enhancing Tumor", "Tumor Core", "Whole Tumor"]
+            for i, cls_name in enumerate(class_names):
+                print(f"  {cls_name}: {validation_metrics['dice_per_class'][i]:.4f}")
+            
+            print("\nMIoU Scores per Class:")
+            for i, cls_name in enumerate(class_names):
+                print(f"  {cls_name}: {validation_metrics['miou_per_class'][i]:.4f}")
+        
         # Calculate epoch time
         epoch_end_time = time.time()
         epoch_time = epoch_end_time - epoch_start_time
@@ -275,8 +413,29 @@ def train_model(
                 'optimizer_state_dict': optimizer.state_dict(),
                 'loss': train_loss
             }
+            
+            # Add validation metrics if calculated
+            if validation_metrics:
+                checkpoint['dice_score'] = validation_metrics['overall_dice']
+                checkpoint['miou'] = validation_metrics['overall_miou']
+            
             torch.save(checkpoint, output_path / f"model_epoch_{epoch+1}.pth")
             print(f"Checkpoint saved to {output_path / f'model_epoch_{epoch+1}.pth'}")
+        
+        # Log metrics to CSV
+        with open(metrics_log_path, 'a') as f:
+            # If validation was run
+            if validation_metrics:
+                dice_per_class = validation_metrics['dice_per_class']
+                miou_per_class = validation_metrics['miou_per_class']
+                f.write(f"{epoch+1},{train_loss:.6f},{validation_metrics['overall_dice']:.6f},"
+                        f"{validation_metrics['overall_miou']:.6f},{dice_per_class[0]:.6f},"
+                        f"{dice_per_class[1]:.6f},{dice_per_class[2]:.6f},{dice_per_class[3]:.6f},"
+                        f"{miou_per_class[0]:.6f},{miou_per_class[1]:.6f},{miou_per_class[2]:.6f},"
+                        f"{miou_per_class[3]:.6f}\n")
+            else:
+                # If validation was not run this epoch, just log training loss
+                f.write(f"{epoch+1},{train_loss:.6f},,,,,,,,,\n")
         
         # Print epoch results
         print(f"\nEpoch {epoch+1}/{epochs} Summary:")
@@ -319,196 +478,6 @@ if __name__ == "__main__":
         'gradient_accumulation_steps': args.gradient_accumulation_steps,
         'resume_from': args.resume_from,
         'benchmark_mode': True
-    }
-    
-    # Train model
-    model = train_model(**config)
-
-
-def diagnose_gpu_performance():
-    """Run more comprehensive tests to diagnose GPU performance issues"""
-    if not torch.cuda.is_available():
-        print("CUDA not available. Cannot diagnose GPU performance.")
-        return
-    
-    print("\n=== GPU Performance Diagnostics ===")
-    
-    # Basic info
-    print(f"GPU: {torch.cuda.get_device_name(0)}")
-    print(f"CUDA Version: {torch.version.cuda}")
-    print(f"PyTorch Version: {torch.__version__}")
-    
-    # Enable tensor core optimizations for A100
-    if hasattr(torch.cuda, 'get_device_capability'):
-        capability = torch.cuda.get_device_capability(0)
-        print(f"CUDA Compute Capability: {capability[0]}.{capability[1]}")
-        if capability[0] >= 8:  # A100 has compute capability 8.0
-            torch.set_float32_matmul_precision('high')
-            print("Enabled Tensor Core optimizations")
-    
-    # Test matrix multiplication (CPU vs GPU) with various sizes
-    sizes = [1000, 2000, 4000, 8192]  # Added larger size for A100
-    
-    for size in sizes:
-        print(f"\nTesting matrix multiplication ({size}x{size}):")
-        
-        # CPU test
-        a_cpu = torch.randn(size, size)
-        b_cpu = torch.randn(size, size)
-        
-        cpu_start = time.time()
-        _ = torch.matmul(a_cpu, b_cpu)
-        cpu_end = time.time()
-        cpu_time = cpu_end - cpu_start
-        
-        # GPU test
-        a_gpu = a_cpu.cuda()
-        b_gpu = b_cpu.cuda()
-        
-        # Warmup
-        _ = torch.matmul(a_gpu, b_gpu)
-        torch.cuda.synchronize()
-        
-        # Test with default precision
-        gpu_start = time.time()
-        _ = torch.matmul(a_gpu, b_gpu)
-        torch.cuda.synchronize()
-        gpu_end = time.time()
-        gpu_time = gpu_end - gpu_start
-        
-        # Test with mixed precision (FP16) if on A100
-        if hasattr(torch.cuda, 'get_device_capability') and torch.cuda.get_device_capability(0)[0] >= 8:
-            with torch.amp.autocast(device_type='cuda'):
-                torch.cuda.synchronize()
-                gpu_fp16_start = time.time()
-                _ = torch.matmul(a_gpu, b_gpu)
-                torch.cuda.synchronize()
-                gpu_fp16_end = time.time()
-            gpu_fp16_time = gpu_fp16_end - gpu_fp16_start
-            
-            print(f"  CPU Time: {cpu_time:.4f}s")
-            print(f"  GPU Time (FP32): {gpu_time:.4f}s")
-            print(f"  GPU Time (FP16): {gpu_fp16_time:.4f}s")
-            print(f"  Speedup vs CPU (FP32): {cpu_time / gpu_time:.1f}x")
-            print(f"  Speedup vs CPU (FP16): {cpu_time / gpu_fp16_time:.1f}x")
-            print(f"  FP16 vs FP32 Speedup: {gpu_time / gpu_fp16_time:.1f}x")
-        else:
-            speedup = cpu_time / gpu_time
-            print(f"  CPU Time: {cpu_time:.4f}s")
-            print(f"  GPU Time: {gpu_time:.4f}s")
-            print(f"  Speedup: {speedup:.1f}x")
-        
-        # Clean up
-        del a_cpu, b_cpu, a_gpu, b_gpu, _
-        torch.cuda.empty_cache()
-    
-    # Test memory bandwidth
-    print("\nTesting memory bandwidth:")
-    tensor_size = 50000000  # 50M elements for A100 (was 10M)
-    
-    # Create large tensor
-    x_gpu = torch.randn(tensor_size, device='cuda')
-    y_gpu = torch.randn(tensor_size, device='cuda')
-    
-    # Warmup
-    _ = x_gpu + y_gpu
-    torch.cuda.synchronize()
-    
-    # Measure bandwidth
-    iterations = 100
-    start_time = time.time()
-    for _ in range(iterations):
-        _ = x_gpu + y_gpu
-    torch.cuda.synchronize()
-    end_time = time.time()
-    
-    # Calculate bandwidth (bytes read + written per second)
-    # Each operation reads 2 tensors and writes 1 tensor
-    elapsed = end_time - start_time
-    elements_processed = tensor_size * iterations
-    bytes_processed = elements_processed * 4 * 3  # 4 bytes per float32, 3 operations (2 read, 1 write)
-    bandwidth = bytes_processed / elapsed / (1024 ** 3)  # Convert to GB/s
-    
-    print(f"  Memory Bandwidth: {bandwidth:.2f} GB/s")
-    theoretical_max = 1935  # A100 has ~1935 GB/s theoretical bandwidth
-    print(f"  Theoretical Max Bandwidth: ~{theoretical_max} GB/s")
-    print(f"  Efficiency: {(bandwidth/theoretical_max)*100:.1f}%")
-    
-    # Clean up
-    del x_gpu, y_gpu, _
-    torch.cuda.empty_cache()
-    
-    # Test cuDNN benchmark mode impact
-    print("\nTesting cuDNN benchmark mode impact:")
-    
-    # Create test tensors
-    input_tensor = torch.randn(8, 64, 64, 64, 64, device='cuda')  # B, C, D, H, W
-    conv3d = torch.nn.Conv3d(64, 64, kernel_size=3, padding=1).cuda()
-    
-    # Test without benchmark
-    torch.backends.cudnn.benchmark = False
-    
-    # Warmup
-    _ = conv3d(input_tensor)
-    torch.cuda.synchronize()
-    
-    # Measure
-    trials = 10
-    start = time.time()
-    for _ in range(trials):
-        _ = conv3d(input_tensor)
-    torch.cuda.synchronize()
-    end = time.time()
-    time_no_benchmark = (end - start) / trials
-    
-    # Test with benchmark
-    torch.backends.cudnn.benchmark = True
-    
-    # Warmup again with benchmark enabled
-    _ = conv3d(input_tensor)
-    torch.cuda.synchronize()
-    
-    # Measure
-    start = time.time()
-    for _ in range(trials):
-        _ = conv3d(input_tensor)
-    torch.cuda.synchronize()
-    end = time.time()
-    time_with_benchmark = (end - start) / trials
-    
-    print(f"  Conv3D without benchmark: {time_no_benchmark:.4f}s")
-    print(f"  Conv3D with benchmark: {time_with_benchmark:.4f}s")
-    print(f"  Speedup from benchmark: {time_no_benchmark / time_with_benchmark:.2f}x")
-    
-    # Clean up
-    del input_tensor, conv3d, _
-    torch.cuda.empty_cache()
-    
-    print("\nGPU Performance Diagnostics Complete")
-
-
-if __name__ == "__main__":
-    # Set random seed for reproducibility
-    torch.manual_seed(42)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(42)
-    
-    # Run diagnostics first
-    diagnose_gpu_performance()
-    
-    # Configuration for A100 GPU
-    config = {
-        'data_path': "processed_data/brats128_split/",
-        'output_path': "/tmp/output/",
-        'batch_size': 16,        # Increased batch size
-        'num_workers': 4,       # Increased workers
-        'epochs': 100,
-        'learning_rate': 1e-4,
-        'weight_decay': 1e-5,
-        'use_mixed_precision': True,
-        'gradient_accumulation_steps': 1,  # Reduced for A100
-        'resume_from': None,
-        'benchmark_mode': True  # Enable cuDNN benchmarking
     }
     
     # Train model

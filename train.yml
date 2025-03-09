@@ -46,8 +46,6 @@ spec:
           eval "$(conda shell.bash hook)" # Still using conda shell hook for environment setup
           conda activate /conda-envs/BraTS || { echo "Failed to activate environment"; exit 1; }
 
-          python ${REPO_PATH}/gpucheck.py
-
           # Check shared memory size
           df -h /dev/shm
           
