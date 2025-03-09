@@ -48,8 +48,11 @@ spec:
 
           python ${REPO_PATH}/gpucheck.py
 
-          # Run the training script from the /data directory to ensure correct path resolution
-          python ${REPO_PATH}/segmentation/train.py
+          # Check shared memory size
+          df -h /dev/shm
+          
+          # Run the training script from the /data directory with modified params
+          python ${REPO_PATH}/segmentation/train.py --num_workers=2 --batch_size=1
 
         volumeMounts: # Mount volumes into the container
         - name: git-repo
@@ -58,6 +61,8 @@ spec:
           mountPath: /data      # Mount for the brats data
         - name: conda-environments1
           mountPath: /conda-envs # Mount for conda environments
+        - name: dshm            # Add shared memory volume mount
+          mountPath: /dev/shm   # Standard shared memory path
 
         resources: # Resource requests and limits for the container
           limits:
@@ -115,6 +120,10 @@ spec:
       - name: conda-environments1 # Volume for conda environments - PersistentVolumeClaim for persistent environments
         persistentVolumeClaim:
           claimName: conda-environments1
+      - name: dshm        # Add shared memory volume definition
+        emptyDir:
+          medium: Memory  # Use memory as storage medium
+          sizeLimit: 8Gi  # Allocate 8GB of shared memory
 
       restartPolicy: Never # Job should not restart containers on failure
 

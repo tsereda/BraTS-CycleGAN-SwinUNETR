@@ -7,6 +7,17 @@ from typing import Tuple, List, Dict, Optional, Callable, Any
 import random
 
 
+# Define worker initialization function first
+def worker_init_fn(worker_id):
+    """
+    Worker initialization function to improve reproducibility and memory usage
+    """
+    # Set different seed for each worker
+    worker_seed = torch.initial_seed() % 2**32
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
+
+
 class RandomFlip3D:
     """Randomly flip 3D volume along specified axes"""
     def __init__(self, axes=(0, 1, 2), p=0.5):
@@ -114,18 +125,9 @@ class BraTSDataset(Dataset):
             img_path = self.img_files[idx]
             mask_path = self.mask_files[idx]
             
-            #if self.debug:
-                #print(f"Loading: {img_path.name}, {mask_path.name}")
-            
             # Load data
             img = np.load(img_path)
             mask = np.load(mask_path)
-            
-            # Debug information about data
-            # print(f"Image shape: {img.shape}, range: {img.min():.4f} to {img.max():.4f}")
-            #unique_mask_values = np.unique(mask)
-            #print(f"Mask shape: {mask.shape}, unique values: {unique_mask_values}")
-        
             
             # Extract just the integer label from the mask (if one-hot encoded)
             if len(mask.shape) == 4 and mask.shape[3] in [3, 4]:  # One-hot encoded mask
@@ -163,7 +165,7 @@ class BraTSDataset(Dataset):
                 print(f"Error loading sample {idx} ({self.img_files[idx].name}): {e}")
             
             # Return a simple dummy sample instead of crashing
-            dummy_img = torch.zeros((3, 128, 128, 128), dtype=torch.float32)
+            dummy_img = torch.zeros((4, 128, 128, 128), dtype=torch.float32)  # Corrected to 4 channels
             dummy_mask = torch.zeros((128, 128, 128), dtype=torch.long)
             return dummy_img, dummy_mask
 
@@ -184,7 +186,7 @@ def get_transforms(mode: str) -> Optional[Callable]:
 def get_data_loaders(
     data_path: str,
     batch_size: int = 1,
-    num_workers: int = 4,
+    num_workers: int = 0,  # Default to 0 worker for safety
     use_augmentation: bool = True,
     debug: bool = False
 ) -> Tuple[DataLoader, DataLoader]:
@@ -214,7 +216,7 @@ def get_data_loaders(
         print(f"Error creating training dataset: {e}")
         # Create empty dataset as fallback
         train_dataset = torch.utils.data.TensorDataset(
-            torch.zeros((1, 3, 128, 128, 128)),
+            torch.zeros((1, 4, 128, 128, 128)),  # Corrected to 4 channels
             torch.zeros((1, 128, 128, 128), dtype=torch.long)
         )
 
@@ -230,7 +232,7 @@ def get_data_loaders(
         print(f"Error creating validation dataset: {e}")
         # Create empty dataset as fallback
         val_dataset = torch.utils.data.TensorDataset(
-            torch.zeros((1, 3, 128, 128, 128)),
+            torch.zeros((1, 4, 128, 128, 128)),  # Corrected to 4 channels
             torch.zeros((1, 128, 128, 128), dtype=torch.long)
         )
     
@@ -238,24 +240,38 @@ def get_data_loaders(
         print(f"Train dataset size: {len(train_dataset)}")
         print(f"Validation dataset size: {len(val_dataset)}")
     
-    # Create data loaders
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=batch_size,
-        shuffle=True,
-        num_workers=num_workers,
-        pin_memory=True,
-        drop_last=True
-    )
-
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        num_workers=num_workers,
-        pin_memory=True,
-        drop_last=False
-    )
+    # Create data loaders with safer settings
+    train_loader_args = {
+        'batch_size': batch_size,
+        'shuffle': True,
+        'pin_memory': True,
+        'drop_last': True,
+    }
+    
+    val_loader_args = {
+        'batch_size': batch_size,
+        'shuffle': False,
+        'pin_memory': True,
+        'drop_last': False,
+    }
+    
+    # Only add these parameters if using workers
+    if num_workers > 0:
+        train_loader_args.update({
+            'num_workers': num_workers,
+            'worker_init_fn': worker_init_fn,
+            'persistent_workers': True,
+            'prefetch_factor': 2
+        })
+        val_loader_args.update({
+            'num_workers': num_workers,
+            'worker_init_fn': worker_init_fn,
+            'persistent_workers': True,
+            'prefetch_factor': 2
+        })
+    
+    train_loader = DataLoader(train_dataset, **train_loader_args)
+    val_loader = DataLoader(val_dataset, **val_loader_args)
     
     if debug:
         print(f"Train loader batches: {len(train_loader)}")

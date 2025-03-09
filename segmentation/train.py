@@ -9,6 +9,7 @@ import datetime
 from tqdm import tqdm
 import sys
 import gc
+import argparse
 
 # Import the fixed loss and model
 from losses import CombinedLoss
@@ -16,34 +17,46 @@ from swin_unetr import ImprovedSwinUNETR
 from dataset import get_data_loaders, BraTSDataset
 
 
+def parse_args():
+    """Parse command line arguments"""
+    parser = argparse.ArgumentParser(description='BraTS Segmentation Training')
+    parser.add_argument('--data_path', type=str, default="processed_data/brats128_split/",
+                        help='Path to dataset')
+    parser.add_argument('--output_path', type=str, default="/tmp/output/",
+                        help='Path to save outputs')
+    parser.add_argument('--batch_size', type=int, default=1,
+                        help='Batch size')
+    parser.add_argument('--num_workers', type=int, default=2,
+                        help='Number of workers for data loading')
+    parser.add_argument('--epochs', type=int, default=100,
+                        help='Number of epochs')
+    parser.add_argument('--learning_rate', type=float, default=1e-4,
+                        help='Learning rate')
+    parser.add_argument('--weight_decay', type=float, default=1e-5,
+                        help='Weight decay')
+    parser.add_argument('--gradient_accumulation_steps', type=int, default=2,
+                        help='Number of steps to accumulate gradients')
+    parser.add_argument('--resume_from', type=str, default=None,
+                        help='Path to checkpoint to resume from')
+    
+    return parser.parse_args()
+
+
 def train_model(
     data_path: str,
     output_path: str,
-    batch_size: int = 2,  # Increased from 1 to 2
-    num_workers: int = 4,  # Increased from 0 to 4
+    batch_size: int = 1,  # Changed from 2 to 1
+    num_workers: int = 2,  # Changed from 4 to 2
     epochs: int = 100,
     learning_rate: float = 1e-4,
     weight_decay: float = 1e-5,
     use_mixed_precision: bool = True,
-    gradient_accumulation_steps: int = 1,  # Reduced from 4 to 1 for A100
+    gradient_accumulation_steps: int = 2,  # Changed from 1 to 2 to compensate for smaller batch size
     resume_from: Optional[str] = None,
     benchmark_mode: bool = True  # Enable cuDNN benchmarking
 ):
     """
-    Optimized training function for A100 GPUs
-    
-    Args:
-        data_path: Path to dataset
-        output_path: Path to save outputs
-        batch_size: Batch size (increased for A100)
-        num_workers: Number of workers for data loading
-        epochs: Number of epochs
-        learning_rate: Learning rate
-        weight_decay: Weight decay
-        use_mixed_precision: Whether to use mixed precision training
-        gradient_accumulation_steps: Number of steps to accumulate gradients
-        resume_from: Path to checkpoint to resume from
-        benchmark_mode: Enable cuDNN benchmarking for optimized performance
+    Optimized training function for A100 GPUs with memory efficiency improvements
     """
     # Create output directory
     output_path = Path(output_path)
@@ -51,6 +64,13 @@ def train_model(
     
     # Set device and optimization flags
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
+    # Print shared memory information
+    if os.path.exists('/dev/shm'):
+        shm_stats = os.statvfs('/dev/shm')
+        shm_size_gb = shm_stats.f_blocks * shm_stats.f_frsize / (1024**3)
+        shm_free_gb = shm_stats.f_bavail * shm_stats.f_frsize / (1024**3)
+        print(f"Shared memory (/dev/shm): Total: {shm_size_gb:.2f} GB, Free: {shm_free_gb:.2f} GB")
     
     # Enable cuDNN benchmarking and deterministic algorithms for A100
     if benchmark_mode and torch.cuda.is_available():
@@ -69,7 +89,6 @@ def train_model(
         print(f"PyTorch CUDA current device: {torch.cuda.current_device()}")
         print(f"Initial Memory allocated: {torch.cuda.memory_allocated(0) / 1e9:.2f} GB")
         print(f"Initial Memory reserved: {torch.cuda.memory_reserved(0) / 1e9:.2f} GB")
-        print(f"Max memory allocated: {torch.cuda.max_memory_allocated(0) / 1e9:.2f} GB")
         
         # Reset max memory stats
         torch.cuda.reset_peak_memory_stats()
@@ -85,40 +104,21 @@ def train_model(
                 # Set tensor core optimization flags for PyTorch
                 torch.set_float32_matmul_precision('high')
                 print("Tensor Core optimization enabled (float32_matmul_precision=high)")
-            
-        # Run a quick benchmark with larger tensors for A100
-        print("\n--- Running quick GPU benchmark ---")
-        benchmark_tensor_size = 8192  # Larger for A100
-        start_time = time.time()
-        x = torch.randn(benchmark_tensor_size, benchmark_tensor_size, device=device)
-        y = torch.randn(benchmark_tensor_size, benchmark_tensor_size, device=device)
-        torch.cuda.synchronize()
-        matmul_start = time.time()
-        z = torch.matmul(x, y)
-        torch.cuda.synchronize()
-        matmul_end = time.time()
-        print(f"Matrix multiplication time ({benchmark_tensor_size}x{benchmark_tensor_size}): {(matmul_end - matmul_start):.4f} seconds")
-        del x, y, z
-        torch.cuda.empty_cache()
-        gc.collect()
-    
-    # Enable prefetch for DataLoader (better data loading utilization)
-    torch.multiprocessing.set_sharing_strategy('file_system')
     
     # Get data loaders with optimized settings
     train_loader, val_loader = get_data_loaders(
         data_path=data_path,
         batch_size=batch_size,
-        num_workers=num_workers,  # Use more workers for A100
+        num_workers=num_workers,  # Use fewer workers to reduce shared memory usage
         use_augmentation=True,
         debug=True  # Enable debug mode for the dataset
     )
     
-    # Initialize model - Use simplified model architecture
+    # Initialize model with slightly reduced feature size to save memory
     model = ImprovedSwinUNETR(
         in_channels=4,
         num_classes=4,
-        feature_size=48  # Increased feature size for A100
+        feature_size=32  # Reduced from 48 to 32 to save memory
     )
     
     model.initialize_weights()
@@ -138,14 +138,14 @@ def train_model(
         class_weights=class_weights
     )
     
-    # Optimizer with gradient clipping - use more advanced optimizer settings
+    # Optimizer with gradient clipping
     optimizer = optim.AdamW(
         model.parameters(),
         lr=learning_rate,
         weight_decay=weight_decay,
-        betas=(0.9, 0.999),  # Default betas
-        eps=1e-8,           # Default epsilon
-        amsgrad=False       # Don't use AMSGrad variant
+        betas=(0.9, 0.999),
+        eps=1e-8,
+        amsgrad=False
     )
     
     # Learning rate scheduler - use cosine annealing for better convergence
@@ -174,12 +174,6 @@ def train_model(
     # Training loop
     print("\n=== Starting Training ===\n")
     
-    # Track timing statistics
-    epoch_times = []
-    batch_times = []
-    forward_times = []
-    backward_times = []
-    
     for epoch in range(start_epoch, epochs):
         epoch_start_time = time.time()
         
@@ -192,119 +186,86 @@ def train_model(
         print(f"Epoch {epoch+1}/{epochs} started at {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         
         # Reset gradients at the beginning of each epoch
-        optimizer.zero_grad(set_to_none=True)  # More efficient than setting to zero
+        optimizer.zero_grad(set_to_none=True)
         
-        # Timing stats for this epoch
-        epoch_batch_times = []
-        epoch_forward_times = []
-        epoch_backward_times = []
-        
-        # For first epoch, warm up the GPU with a few batches
-        if epoch == 0:
-            print("Warming up GPU with initial batches...")
-            # Get a sample batch
-            for sample_batch in train_loader:
-                if isinstance(sample_batch, (list, tuple)):
-                    sample_images, sample_targets = sample_batch
-                    sample_images, sample_targets = sample_images.to(device), sample_targets.to(device)
-                    # Run a forward and backward pass to initialize CUDA kernels
-                    with torch.amp.autocast(device_type="cuda", enabled=use_mixed_precision):
-                        outputs = model(sample_images)
-                        loss = loss_fn(outputs, sample_targets)
-                    scaler.scale(loss).backward()
+        try:
+            for batch_idx, (images, targets) in enumerate(train_loader):
+                batch_start_time = time.time()
+                
+                # Move data to device
+                images, targets = images.to(device, non_blocking=True), targets.to(device, non_blocking=True)
+                
+                # Clear unnecessary CPU tensors
+                torch.cuda.empty_cache()
+                
+                # Forward pass with mixed precision if enabled
+                with torch.amp.autocast(device_type="cuda", enabled=use_mixed_precision):
+                    outputs = model(images)
+                    loss = loss_fn(outputs, targets) / gradient_accumulation_steps
+                
+                # Backward pass with scaler
+                scaler.scale(loss).backward()
+                
+                # Update weights if we've accumulated enough gradients
+                if (batch_idx + 1) % gradient_accumulation_steps == 0:
+                    # Gradient clipping
+                    scaler.unscale_(optimizer)
+                    grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                    
+                    # Update weights
                     scaler.step(optimizer)
                     scaler.update()
                     optimizer.zero_grad(set_to_none=True)
-                    # Clear from memory
-                    del sample_images, sample_targets, outputs, loss
-                    torch.cuda.empty_cache()
-                    # Only need one batch for warmup
-                    break
-            
-            print("GPU warmup completed")
-        
-        for batch_idx, (images, targets) in enumerate(train_loader):
-            batch_start_time = time.time()
-            
-            # Move data to device
-            images, targets = images.to(device, non_blocking=True), targets.to(device, non_blocking=True)
-            
-            # Forward pass with mixed precision if enabled
-            forward_start_time = time.time()
-            
-            with torch.amp.autocast(device_type="cuda", enabled=use_mixed_precision):
-                outputs = model(images)
-                loss = loss_fn(outputs, targets) / gradient_accumulation_steps
-            
-            forward_end_time = time.time()
-            forward_time = forward_end_time - forward_start_time
-            epoch_forward_times.append(forward_time)
-            
-            # Backward pass with scaler
-            backward_start_time = time.time()
-            scaler.scale(loss).backward()
-            
-            # Update weights if we've accumulated enough gradients
-            if (batch_idx + 1) % gradient_accumulation_steps == 0:
-                # Gradient clipping
-                scaler.unscale_(optimizer)
-                grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 
-                # Update weights
-                scaler.step(optimizer)
-                scaler.update()
-                optimizer.zero_grad(set_to_none=True)  # More efficient
-            
-            backward_end_time = time.time()
-            backward_time = backward_end_time - backward_start_time
-            epoch_backward_times.append(backward_time)
-            
-            # Update running loss (use the scaled loss value)
-            batch_loss = loss.item() * gradient_accumulation_steps  # Rescale for reporting
-            train_loss += batch_loss
-            batch_count += 1
-            
-            # Calculate batch time
-            batch_end_time = time.time()
-            batch_time = batch_end_time - batch_start_time
-            epoch_batch_times.append(batch_time)
-            
-            # Clear unnecessary tensor memory
-            del outputs
-            
-            # Print progress explicitly instead of using tqdm
-            if (batch_idx + 1) % 10 == 0 or batch_idx == 0:  # Print more frequently
-                # Get current GPU memory usage
-                current_memory = torch.cuda.memory_allocated(0) / 1e9
-                max_memory = torch.cuda.max_memory_allocated(0) / 1e9
+                # Update running loss (use the scaled loss value)
+                batch_loss = loss.item() * gradient_accumulation_steps
+                train_loss += batch_loss
+                batch_count += 1
                 
-                print(f"Batch {batch_idx+1}/{len(train_loader)}, Loss: {batch_loss:.4f}, "
-                      f"Time: {batch_time:.3f}s (F: {forward_time:.3f}s, B: {backward_time:.3f}s), "
-                      f"GPU Mem: {current_memory:.2f}/{max_memory:.2f} GB, "
-                      f"LR: {optimizer.param_groups[0]['lr']:.6f}")
+                # Calculate batch time
+                batch_end_time = time.time()
+                batch_time = batch_end_time - batch_start_time
                 
-            # Ensure output is flushed immediately in containerized environments
-            sys.stdout.flush()
+                # Clear unnecessary GPU tensors
+                del outputs
+                torch.cuda.empty_cache()
+                
+                # Print progress
+                if (batch_idx + 1) % 5 == 0 or batch_idx == 0:
+                    current_memory = torch.cuda.memory_allocated(0) / 1e9
+                    max_memory = torch.cuda.max_memory_allocated(0) / 1e9
+                    
+                    print(f"Batch {batch_idx+1}/{len(train_loader)}, Loss: {batch_loss:.4f}, "
+                          f"Time: {batch_time:.3f}s, "
+                          f"GPU Mem: {current_memory:.2f}/{max_memory:.2f} GB, "
+                          f"LR: {optimizer.param_groups[0]['lr']:.6f}")
+                    
+                # Ensure output is flushed immediately
+                sys.stdout.flush()
+                
+        except Exception as e:
+            print(f"Error during training: {e}")
+            # Save emergency checkpoint
+            emergency_checkpoint = {
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'error': str(e)
+            }
+            torch.save(emergency_checkpoint, output_path / f"emergency_checkpoint_epoch_{epoch+1}.pth")
+            print(f"Emergency checkpoint saved to {output_path / f'emergency_checkpoint_epoch_{epoch+1}.pth'}")
+            raise e
         
         # Update scheduler
         scheduler.step()
         
         # Calculate average train loss
-        train_loss /= batch_count
+        if batch_count > 0:
+            train_loss /= batch_count
         
         # Calculate epoch time
         epoch_end_time = time.time()
         epoch_time = epoch_end_time - epoch_start_time
-        epoch_times.append(epoch_time)
-        
-        # Calculate average batch, forward, and backward times
-        avg_batch_time = sum(epoch_batch_times) / len(epoch_batch_times)
-        avg_forward_time = sum(epoch_forward_times) / len(epoch_forward_times)
-        avg_backward_time = sum(epoch_backward_times) / len(epoch_backward_times)
-        
-        batch_times.append(avg_batch_time)
-        forward_times.append(avg_forward_time)
-        backward_times.append(avg_backward_time)
         
         # Save checkpoint every 5 epochs
         if (epoch + 1) % 5 == 0 or epoch == epochs - 1:
@@ -322,33 +283,46 @@ def train_model(
         print(f"  Train Loss: {train_loss:.4f}")
         print(f"  Learning Rate: {optimizer.param_groups[0]['lr']:.6f}")
         print(f"  Epoch Time: {epoch_time:.2f}s ({time.strftime('%H:%M:%S', time.gmtime(epoch_time))})")
-        print(f"  Avg Batch Time: {avg_batch_time:.3f}s")
-        print(f"  Avg Forward Time: {avg_forward_time:.3f}s")
-        print(f"  Avg Backward Time: {avg_backward_time:.3f}s")
         print(f"  Current GPU Memory: {torch.cuda.memory_allocated(0) / 1e9:.2f} GB")
         print(f"  Max GPU Memory: {torch.cuda.max_memory_allocated(0) / 1e9:.2f} GB")
         
-        # Force clear CUDA cache periodically to avoid memory fragmentation
-        if (epoch + 1) % 5 == 0:
-            torch.cuda.empty_cache()
+        # Force clear CUDA cache after each epoch to avoid memory fragmentation
+        torch.cuda.empty_cache()
+        gc.collect()
         
         sys.stdout.flush()
     
-    # Print overall timing statistics
-    avg_epoch_time = sum(epoch_times) / len(epoch_times)
-    avg_batch_time_overall = sum(batch_times) / len(batch_times)
-    avg_forward_time_overall = sum(forward_times) / len(forward_times)
-    avg_backward_time_overall = sum(backward_times) / len(backward_times)
-    
     print("\n=== Training Complete ===")
-    print(f"Average Epoch Time: {avg_epoch_time:.2f}s ({time.strftime('%H:%M:%S', time.gmtime(avg_epoch_time))})")
-    print(f"Average Batch Time: {avg_batch_time_overall:.3f}s")
-    print(f"Average Forward Time: {avg_forward_time_overall:.3f}s")
-    print(f"Average Backward Time: {avg_backward_time_overall:.3f}s")
-    print(f"Final GPU Memory Usage: {torch.cuda.memory_allocated(0) / 1e9:.2f} GB")
-    print(f"Peak GPU Memory Usage: {torch.cuda.max_memory_allocated(0) / 1e9:.2f} GB")
     
     return model
+
+
+if __name__ == "__main__":
+    # Set random seed for reproducibility
+    torch.manual_seed(42)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(42)
+    
+    # Parse command line arguments
+    args = parse_args()
+    
+    # Configuration for A100 GPU
+    config = {
+        'data_path': args.data_path,
+        'output_path': args.output_path,
+        'batch_size': args.batch_size,
+        'num_workers': args.num_workers,
+        'epochs': args.epochs,
+        'learning_rate': args.learning_rate,
+        'weight_decay': args.weight_decay,
+        'use_mixed_precision': True,
+        'gradient_accumulation_steps': args.gradient_accumulation_steps,
+        'resume_from': args.resume_from,
+        'benchmark_mode': True
+    }
+    
+    # Train model
+    model = train_model(**config)
 
 
 def diagnose_gpu_performance():
