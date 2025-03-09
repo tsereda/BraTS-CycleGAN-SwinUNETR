@@ -233,7 +233,7 @@ def train_model(
     model = ImprovedSwinUNETR(
         in_channels=4,
         num_classes=4,
-        feature_size=64  # Reduced from 48 to 32 to save memory
+        feature_size=48  # Reduced from 48 to 32 to save memory
     )
     
     model.initialize_weights()
