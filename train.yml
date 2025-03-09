@@ -50,7 +50,7 @@ spec:
           df -h /dev/shm
           
           # Run the training script from the /data directory with modified params
-          python ${REPO_PATH}/segmentation/train.py --num_workers=2 --batch_size=1
+          python ${REPO_PATH}/segmentation/train.py --num_workers=2 --batch_size=12
 
         volumeMounts: # Mount volumes into the container
         - name: git-repo
@@ -66,11 +66,11 @@ spec:
           limits:
             memory: 36Gi
             cpu: "12"
-            nvidia.com/a100: "2"
+            nvidia.com/a100: "1"
           requests:
             memory: 30Gi
             cpu: "10"
-            nvidia.com/a100: "2"
+            nvidia.com/a100: "1"
 
       initContainers: # Init containers run before the main container
       - name: volume-permissions # Init container to set volume permissions
