@@ -170,12 +170,15 @@ class SwinTransformerStage(nn.Module):
         drop_path: float = 0.,
         norm_layer: nn.Module = nn.LayerNorm,
         downscale: bool = True,  # Whether to downscale at the end of the stage
+        out_dim: Optional[int] = None  # Output dimension after downscaling
     ):
         super().__init__()
         self.dim = dim
         self.depth = depth
         self.window_size = window_size
         self.downscale = downscale
+        # Default output dimension is double the input dimension if downscaling
+        self.out_dim = out_dim if out_dim is not None else dim * 2 if downscale else dim
         
         # Build transformer blocks
         self.blocks = nn.ModuleList()
@@ -193,9 +196,12 @@ class SwinTransformerStage(nn.Module):
             )
             self.blocks.append(block)
             
-        # Downscaling layer - simplify to standard max pooling for stability
+        # Downscaling with channel adjustment
         if self.downscale:
-            self.downsample = nn.MaxPool3d(kernel_size=2, stride=2)
+            self.downsample = nn.Sequential(
+                nn.MaxPool3d(kernel_size=2, stride=2),
+                nn.Conv3d(dim, self.out_dim, kernel_size=1, stride=1)  # 1x1 conv to adjust channels
+            )
         else:
             self.downsample = nn.Identity()
         
@@ -300,13 +306,17 @@ class Encoder(nn.Module):
             # Check if this is the last stage (no downscaling after)
             is_last = i_stage == len(depths) - 1
             
+            # Calculate output dimension for this stage
+            out_dim = feature_size * (2 ** (i_stage + 1)) if not is_last else dim
+            
             # Create stage
             stage = SwinTransformerStage(
                 dim=dim,
                 depth=depths[i_stage],
                 num_heads=num_heads[i_stage],
                 window_size=(7, 7, 7),
-                downscale=not is_last
+                downscale=not is_last,
+                out_dim=out_dim  # Pass the calculated output dimension
             )
             self.stages.append(stage)
             
@@ -333,10 +343,8 @@ class Encoder(nn.Module):
             # Process through stage
             x = stage(x)
             
-            # Log shape for debugging
-            if i > 0:
-                expected_shape = [s // (2**i) for s in initial_shape[2:]]
-                print(f"Stage {i} input shape mismatch: got {tuple(x.shape[2:])}, expected {expected_shape}")
+            # Add debug info for shape tracking
+            print(f"Stage {i} output shape: {tuple(x.shape)}")
         
         return x, skips
 
