@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-from typing import Tuple, List
+from typing import Tuple, List, Optional
 
 
 class PatchEmbed3D(nn.Module):
@@ -170,12 +170,15 @@ class SwinTransformerStage(nn.Module):
         drop_path: float = 0.,
         norm_layer: nn.Module = nn.LayerNorm,
         downscale: bool = True,  # Whether to downscale at the end of the stage
+        out_dim: Optional[int] = None  # Output dimension after downscaling
     ):
         super().__init__()
         self.dim = dim
         self.depth = depth
         self.window_size = window_size
         self.downscale = downscale
+        # Default output dimension is double the input dimension if downscaling
+        self.out_dim = out_dim if out_dim is not None else dim * 2 if downscale else dim
         
         # Build transformer blocks
         self.blocks = nn.ModuleList()
@@ -193,9 +196,12 @@ class SwinTransformerStage(nn.Module):
             )
             self.blocks.append(block)
             
-        # Downscaling layer - simplify to standard max pooling for stability
+        # Downscaling with channel adjustment
         if self.downscale:
-            self.downsample = nn.MaxPool3d(kernel_size=2, stride=2)
+            self.downsample = nn.Sequential(
+                nn.MaxPool3d(kernel_size=2, stride=2),
+                nn.Conv3d(dim, self.out_dim, kernel_size=1, stride=1)  # 1x1 conv to adjust channels
+            )
         else:
             self.downsample = nn.Identity()
         
@@ -240,6 +246,7 @@ class TransformerBlock3D(nn.Module):
         # Simplified architecture - use standard 3D convolutions
         self.conv1 = nn.Conv3d(dim, dim, kernel_size=3, padding=1)
         self.norm1 = nn.BatchNorm3d(dim)
+        
         self.act1 = nn.GELU()
         
         self.conv2 = nn.Conv3d(dim, dim, kernel_size=3, padding=1)
@@ -274,7 +281,7 @@ class Encoder(nn.Module):
     def __init__(
         self,
         in_channels: int,
-        feature_size: int = 32,
+        feature_size: int = 48,
         depths: Tuple[int, int, int, int] = (2, 2, 2, 2),
         num_heads: Tuple[int, int, int, int] = (4, 8, 16, 32),
     ):
@@ -300,13 +307,17 @@ class Encoder(nn.Module):
             # Check if this is the last stage (no downscaling after)
             is_last = i_stage == len(depths) - 1
             
+            # Calculate output dimension for this stage
+            out_dim = feature_size * (2 ** (i_stage + 1)) if not is_last else dim
+            
             # Create stage
             stage = SwinTransformerStage(
                 dim=dim,
                 depth=depths[i_stage],
                 num_heads=num_heads[i_stage],
                 window_size=(7, 7, 7),
-                downscale=not is_last
+                downscale=not is_last,
+                out_dim=out_dim  # Pass the calculated output dimension
             )
             self.stages.append(stage)
             
@@ -333,10 +344,8 @@ class Encoder(nn.Module):
             # Process through stage
             x = stage(x)
             
-            # Log shape for debugging
-            if i > 0:
-                expected_shape = [s // (2**i) for s in initial_shape[2:]]
-                print(f"Stage {i} input shape mismatch: got {tuple(x.shape[2:])}, expected {expected_shape}")
+            # Add debug info for shape tracking
+            #print(f"Stage {i} output shape: {tuple(x.shape)}")
         
         return x, skips
 
@@ -375,7 +384,7 @@ class DecoderBlock(nn.Module):
         x = self.upsample(x)
         
         # Print shapes for debugging
-        print(f"After upsampling: shape={x.shape}, skip shape={skip.shape}")
+        #print(f"After upsampling: shape={x.shape}, skip shape={skip.shape}")
         
         # Resize if dimensions don't match
         if x.shape[2:] != skip.shape[2:]:
@@ -435,15 +444,15 @@ class Decoder(nn.Module):
         skips = skips[::-1]
         
         # Print shape before decoding
-        print(f"Before upsampling 0: shape={x.shape}")
+        #print(f"Before upsampling 0: shape={x.shape}")
         
         # Process through decoder blocks
         for i, block in enumerate(self.blocks):
             x = block(x, skips[i])
             
-            # Print shape for next upsampling
-            if i < len(self.blocks) - 1:
-                print(f"Before upsampling {i+1}: shape={x.shape}")
+            # # Print shape for next upsampling
+            # if i < len(self.blocks) - 1:
+            #     print(f"Before upsampling {i+1}: shape={x.shape}")
         
         # Final convolution
         x = self.final_conv(x)
@@ -483,7 +492,7 @@ class ImprovedSwinUNETR(nn.Module):
             num_heads.append(heads)
             
         self.num_heads = tuple(num_heads)
-        print(f"Using num_heads: {self.num_heads}")
+        #print(f"Using num_heads: {self.num_heads}")
         
         # Create encoder
         self.encoder = Encoder(
@@ -505,7 +514,7 @@ class ImprovedSwinUNETR(nn.Module):
         input_shape = x.shape
         
         # Print input shapes for debugging
-        print(f"Image shape: {tuple(x.shape[2:])}, range: {x.min().item():.4f} to {x.max().item():.4f}")
+        # print(f"Image shape: {tuple(x.shape[2:])}, range: {x.min().item():.4f} to {x.max().item():.4f}")
         
         # Encoder
         bottleneck, skips = self.encoder(x)
