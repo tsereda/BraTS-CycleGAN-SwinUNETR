@@ -126,7 +126,9 @@ def train_model(
         batch_count = 0
         
         # Use tqdm for progress bar
-        with tqdm(total=len(train_loader), desc=f'Epoch {epoch+1}/{epochs}') as pbar:
+        with tqdm(total=len(train_loader), desc=f'Epoch {epoch+1}/{epochs}', 
+          mininterval=0.1, disable=False, 
+          bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}') as pbar:
             # Reset gradients at the beginning of each epoch
             optimizer.zero_grad()
             
@@ -135,9 +137,9 @@ def train_model(
                 images, targets = images.to(device), targets.to(device)
                 
                 # Print data shapes and ranges for debugging
-                if batch_idx == 0:
-                    print(f"Image shape: {tuple(images.shape[2:])}, range: {images.min().item():.4f} to {images.max().item():.4f}")
-                    print(f"Mask shape: {tuple(targets.shape)}, unique values: {torch.unique(targets).cpu().numpy()}")
+                # if batch_idx == 0:
+                #     print(f"Image shape: {tuple(images.shape[2:])}, range: {images.min().item():.4f} to {images.max().item():.4f}")
+                #     print(f"Mask shape: {tuple(targets.shape)}, unique values: {torch.unique(targets).cpu().numpy()}")
                 
                 # Forward pass with mixed precision if enabled
                 if use_mixed_precision:
@@ -186,6 +188,9 @@ def train_model(
                     'lr': f'{optimizer.param_groups[0]["lr"]:.6f}'
                 })
                 pbar.update()
+
+                if (batch_idx + 1) % 10 == 0:  # Print every 10 batches
+                    print(f"\nBatch {batch_idx+1}/{len(train_loader)}, Loss: {batch_loss:.4f}")
         
         # Update scheduler
         scheduler.step()

@@ -344,7 +344,7 @@ class Encoder(nn.Module):
             x = stage(x)
             
             # Add debug info for shape tracking
-            print(f"Stage {i} output shape: {tuple(x.shape)}")
+            #print(f"Stage {i} output shape: {tuple(x.shape)}")
         
         return x, skips
 
@@ -383,7 +383,7 @@ class DecoderBlock(nn.Module):
         x = self.upsample(x)
         
         # Print shapes for debugging
-        print(f"After upsampling: shape={x.shape}, skip shape={skip.shape}")
+        #print(f"After upsampling: shape={x.shape}, skip shape={skip.shape}")
         
         # Resize if dimensions don't match
         if x.shape[2:] != skip.shape[2:]:
@@ -443,15 +443,15 @@ class Decoder(nn.Module):
         skips = skips[::-1]
         
         # Print shape before decoding
-        print(f"Before upsampling 0: shape={x.shape}")
+        #print(f"Before upsampling 0: shape={x.shape}")
         
         # Process through decoder blocks
         for i, block in enumerate(self.blocks):
             x = block(x, skips[i])
             
-            # Print shape for next upsampling
-            if i < len(self.blocks) - 1:
-                print(f"Before upsampling {i+1}: shape={x.shape}")
+            # # Print shape for next upsampling
+            # if i < len(self.blocks) - 1:
+            #     print(f"Before upsampling {i+1}: shape={x.shape}")
         
         # Final convolution
         x = self.final_conv(x)
@@ -491,7 +491,7 @@ class ImprovedSwinUNETR(nn.Module):
             num_heads.append(heads)
             
         self.num_heads = tuple(num_heads)
-        print(f"Using num_heads: {self.num_heads}")
+        #print(f"Using num_heads: {self.num_heads}")
         
         # Create encoder
         self.encoder = Encoder(
@@ -513,7 +513,7 @@ class ImprovedSwinUNETR(nn.Module):
         input_shape = x.shape
         
         # Print input shapes for debugging
-        print(f"Image shape: {tuple(x.shape[2:])}, range: {x.min().item():.4f} to {x.max().item():.4f}")
+        # print(f"Image shape: {tuple(x.shape[2:])}, range: {x.min().item():.4f} to {x.max().item():.4f}")
         
         # Encoder
         bottleneck, skips = self.encoder(x)
