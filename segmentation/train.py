@@ -231,7 +231,7 @@ def train_model(
                 torch.cuda.empty_cache()
                 
                 # Print progress
-                if (batch_idx + 1) % 5 == 0 or batch_idx == 0:
+                if (batch_idx + 1) % 50 == 0 or batch_idx == 0:
                     current_memory = torch.cuda.memory_allocated(0) / 1e9
                     max_memory = torch.cuda.max_memory_allocated(0) / 1e9
                     
@@ -500,7 +500,7 @@ if __name__ == "__main__":
     config = {
         'data_path': "processed_data/brats128_split/",
         'output_path': "/tmp/output/",
-        'batch_size': 4,        # Increased batch size
+        'batch_size': 16,        # Increased batch size
         'num_workers': 4,       # Increased workers
         'epochs': 100,
         'learning_rate': 1e-4,

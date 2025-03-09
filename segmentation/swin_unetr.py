@@ -246,6 +246,7 @@ class TransformerBlock3D(nn.Module):
         # Simplified architecture - use standard 3D convolutions
         self.conv1 = nn.Conv3d(dim, dim, kernel_size=3, padding=1)
         self.norm1 = nn.BatchNorm3d(dim)
+        
         self.act1 = nn.GELU()
         
         self.conv2 = nn.Conv3d(dim, dim, kernel_size=3, padding=1)
