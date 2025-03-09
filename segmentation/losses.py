@@ -132,7 +132,7 @@ class CombinedLoss(nn.Module):
         
         # Print diagnostic information
         print(f"Dice loss: {dice.item()}, Focal loss: {focal.item()}")
-        print(f"Total loss before clamping: {total_loss.item()}")
+        #print(f"Total loss before clamping: {total_loss.item()}")
         print(f"Raw loss: {total_loss.item()}, min: {logits.min().item()}, max: {logits.max().item()}")
         
         # Ensure the total loss is not negative

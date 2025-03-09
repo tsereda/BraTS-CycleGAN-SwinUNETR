@@ -114,8 +114,8 @@ class BraTSDataset(Dataset):
             img_path = self.img_files[idx]
             mask_path = self.mask_files[idx]
             
-            if self.debug:
-                print(f"Loading: {img_path.name}, {mask_path.name}")
+            #if self.debug:
+                #print(f"Loading: {img_path.name}, {mask_path.name}")
             
             # Load data
             img = np.load(img_path)
@@ -123,8 +123,8 @@ class BraTSDataset(Dataset):
             
             # Debug information about data
             print(f"Image shape: {img.shape}, range: {img.min():.4f} to {img.max():.4f}")
-            unique_mask_values = np.unique(mask)
-            print(f"Mask shape: {mask.shape}, unique values: {unique_mask_values}")
+            #unique_mask_values = np.unique(mask)
+            #print(f"Mask shape: {mask.shape}, unique values: {unique_mask_values}")
         
             
             # Extract just the integer label from the mask (if one-hot encoded)
