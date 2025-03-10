@@ -215,7 +215,11 @@ def summarize_performance(step, g_model, dataset, name, n_samples=5, device='cpu
         plt.subplot(2, n_samples, 1 + n_samples + i)
         plt.axis('off')
         plt.imshow(gen_np[0, d_mid, :, :], cmap='gray')
-    filename = '{}_generated_plot_{:06d}.png'.format(name, step+1)
+    # Fix: Use a writable directory instead of '/data/output/'
+    import os
+    output_dir = './output'
+    os.makedirs(output_dir, exist_ok=True)
+    filename = os.path.join(output_dir, '{}_generated_plot_{:06d}.png'.format(name, step+1))
     plt.savefig(filename)
     plt.close()
     g_model.train()
@@ -223,7 +227,7 @@ def summarize_performance(step, g_model, dataset, name, n_samples=5, device='cpu
 # ------------------------------
 # Training Loop for CycleGAN
 def train(d_model_A, d_model_B, g_model_AtoB, g_model_BtoA,
-          dataloader_A, dataloader_B, epochs=1, device='cpu'):
+          dataloader_A, dataloader_B, epochs=100, device='gpu'):
     
     criterion_GAN = nn.MSELoss()
     criterion_cycle = nn.L1Loss()
