@@ -16,6 +16,7 @@ import numpy as np
 from losses import CombinedLoss
 from swin_unetr import ImprovedSwinUNETR
 from dataset import get_data_loaders, BraTSDataset
+from torch.optim.lr_scheduler import OneCycleLR
 
 
 def parse_args():
@@ -23,7 +24,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description='BraTS Segmentation Training')
     parser.add_argument('--data_path', type=str, default="processed_data/brats128_split/",
                         help='Path to dataset')
-    parser.add_argument('--output_path', type=str, default="/tmp/output/",
+    parser.add_argument('--output_path', type=str, default="output/",
                         help='Path to save outputs')
     parser.add_argument('--batch_size', type=int, default=1,
                         help='Batch size')
@@ -134,7 +135,7 @@ def validate(model: torch.nn.Module, val_loader: torch.utils.data.DataLoader,
                 val_iou_scores[class_idx].append(iou_scores[class_idx])
             
             # Print progress
-            if (batch_idx + 1) % 10 == 0:
+            if (batch_idx + 1) % 50 == 0:
                 print(f"Validated {batch_idx + 1}/{len(val_loader)} batches")
                 
     # Calculate mean metrics across all batches
@@ -232,7 +233,7 @@ def train_model(
     model = ImprovedSwinUNETR(
         in_channels=4,
         num_classes=4,
-        feature_size=32  # Reduced from 48 to 32 to save memory
+        feature_size=48  # Reduced from 48 to 32 to save memory
     )
     
     model.initialize_weights()
@@ -245,7 +246,7 @@ def train_model(
     print(f"Trainable parameters: {trainable_params:,}")
     
     # Use fixed CombinedLoss with equal class weights
-    class_weights = torch.tensor([0.25, 0.25, 0.25, 0.25]).to(device)
+    class_weights = torch.tensor([0.1, 0.45, 0.2, 0.25]).to(device)
     loss_fn = CombinedLoss(
         dice_weight=0.5,
         focal_weight=0.5,
@@ -263,10 +264,14 @@ def train_model(
     )
     
     # Learning rate scheduler - use cosine annealing for better convergence
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(
+    scheduler = OneCycleLR(
         optimizer,
-        T_max=epochs,
-        eta_min=learning_rate * 0.01
+        max_lr=learning_rate * 5,  # Peak LR 5x initial LR
+        steps_per_epoch=len(train_loader) // gradient_accumulation_steps,
+        epochs=epochs,
+        pct_start=0.3,  # Spend 30% of time warming up
+        div_factor=25,   # Initial LR is max_lr/25
+        final_div_factor=10000  # Final LR is max_lr/10000
     )
     
     # Gradient scaler for mixed precision
@@ -354,7 +359,7 @@ def train_model(
                     current_memory = torch.cuda.memory_allocated(0) / 1e9
                     max_memory = torch.cuda.max_memory_allocated(0) / 1e9
                     
-                    print(f"Batch {batch_idx+1}/{len(train_loader)}, Loss: {batch_loss:.4f}, "
+                    print(f"Loss: {batch_loss:.4f}, "
                           f"Time: {batch_time:.3f}s, "
                           f"GPU Mem: {current_memory:.2f}/{max_memory:.2f} GB, "
                           f"LR: {optimizer.param_groups[0]['lr']:.6f}")
@@ -406,7 +411,7 @@ def train_model(
         epoch_time = epoch_end_time - epoch_start_time
         
         # Save checkpoint every 5 epochs
-        if (epoch + 1) % 5 == 0 or epoch == epochs - 1:
+        if (epoch + 1) % 50 == 0 or epoch == epochs - 1:
             checkpoint = {
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),

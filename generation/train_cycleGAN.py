@@ -215,7 +215,11 @@ def summarize_performance(step, g_model, dataset, name, n_samples=5, device='cpu
         plt.subplot(2, n_samples, 1 + n_samples + i)
         plt.axis('off')
         plt.imshow(gen_np[0, d_mid, :, :], cmap='gray')
-    filename = '{}_generated_plot_{:06d}.png'.format(name, step+1)
+    # Fix: Use a writable directory instead of '/data/output/'
+    import os
+    output_dir = './output'
+    os.makedirs(output_dir, exist_ok=True)
+    filename = os.path.join(output_dir, '{}_generated_plot_{:06d}.png'.format(name, step+1))
     plt.savefig(filename)
     plt.close()
     g_model.train()
@@ -223,7 +227,7 @@ def summarize_performance(step, g_model, dataset, name, n_samples=5, device='cpu
 # ------------------------------
 # Training Loop for CycleGAN
 def train(d_model_A, d_model_B, g_model_AtoB, g_model_BtoA,
-          dataloader_A, dataloader_B, epochs=1, device='cpu'):
+          dataloader_A, dataloader_B, epochs=100, device='gpu'):
     
     criterion_GAN = nn.MSELoss()
     criterion_cycle = nn.L1Loss()
@@ -315,26 +319,8 @@ def train(d_model_A, d_model_B, g_model_AtoB, g_model_BtoA,
 # Main Execution
 if __name__ == '__main__':
     # Update these paths to match your system
-    complete_data_dir = '/root/BraTS-CycleGAN-SwinUNETR/processed_data/brats128_cyclegan/images'
+    complete_data_dir = 'processed_data/brats128_cyclegan/images/'
     
-    print(f"Looking for data in: {complete_data_dir}")
-
-    if not os.path.exists(complete_data_dir):
-        print(f"ERROR: Directory {complete_data_dir} does not exist.")
-        print("Please check your path and ensure the directory is accessible.")
-        exit(1)
-
-    # Check if directory contains any .npy files
-    npy_files = glob(os.path.join(complete_data_dir, '*.npy'))
-    if not npy_files:
-        print(f"ERROR: No .npy files found in {complete_data_dir}")
-        print("Files in directory:", os.listdir(complete_data_dir)[:10])
-        print("Make sure to preprocess your data before training.")
-        exit(1)
-    else:
-        print(f"Found {len(npy_files)} .npy files. First few:")
-        print([os.path.basename(f) for f in npy_files[:5]])
-
     # Domain A: Complete data (simulate_dropout = False)
     dataset_A = PreprocessedDataset(complete_data_dir, simulate_dropout=False)
     # Domain B: Incomplete data (simulate_dropout = True, using random dropout)
