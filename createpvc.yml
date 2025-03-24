@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: brats-data
+spec:
+  accessModes:
+    - ReadWriteOnce  # ReadWriteMany if multiple pods need access at once
+  resources:
+    requests:
+      storage: 500Gi  # Adjust as needed
