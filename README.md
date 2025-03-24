@@ -27,16 +27,6 @@ conda env create -f environment.yml
 conda activate BraTS
 ```
 
-### Docker Environment
-
-```bash
-# Build the Docker image
-docker build -t gitlab-registry.nrp-nautilus.io/timothy.sereda/brats-cyclegan-swinunetr:latest .
-
-# Run the container
-docker run --gpus all -v /path/to/data:/opt/app/data brats-swinunetr:latest
-```
-
 ## Dataset
 
 The project uses the BraTS 2020 dataset, which can be downloaded using the provided script:
@@ -113,11 +103,6 @@ Key components:
 - Patch merging for hierarchical representation
 - 3D convolutional decoder blocks
 
-## Hardware Requirements
-
-- CUDA-compatible GPU (16GB+ VRAM recommended)
-- 32GB+ RAM for preprocessing
-- 100GB+ storage for dataset and preprocessed data
 
 ## HPC/Cluster Deployment
 
