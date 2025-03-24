@@ -47,10 +47,11 @@ ls /data
 
 ## Dataset
 
-The project uses the BraTS 2020 dataset, which can be downloaded using the provided script:
+The project uses the BraTS 2020 dataset, which can be downloaded from Kaggle using curl:
 
 ```bash
-todo
+curl -L -o /data/brats20-dataset-training-validation.zip  https://www.kaggle.com/api/v1/datasets/download/awsaf49
+/brats20-dataset-training-validation
 ```
 
 The dataset includes four MRI modalities:
