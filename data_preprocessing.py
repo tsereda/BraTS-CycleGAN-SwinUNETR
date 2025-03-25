@@ -463,7 +463,7 @@ if __name__ == "__main__":
     # Input paths with defaults pointing to /data directories
     parser.add_argument('--input_train', type=str, default='/data/BraTS2020_TrainingData/MICCAI_BraTS2020_TrainingData', 
                         help='Path to raw training data (default: /data/BraTS2020_TrainingData/MICCAI_BraTS2020_TrainingData)')
-    parser.add_argument('--input_val', type=str, default='/data/BraTS2020_ValidationData/MICCAI_BraTS2020_ValidationData)', 
+    parser.add_argument('--input_val', type=str, default='/data/BraTS2020_ValidationData/MICCAI_BraTS2020_ValidationData', 
                         help='Path to raw validation data (default: /data/BraTS2020_ValidationData/MICCAI_BraTS2020_ValidationData)')
     
     # Output paths
