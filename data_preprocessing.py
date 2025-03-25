@@ -11,6 +11,7 @@ import multiprocessing
 from functools import partial
 import time
 import sys
+import argparse
 
 
 def process_single_case(case_data, output_path, min_label_ratio=0.007, has_mask=True): 
@@ -366,6 +367,8 @@ def create_complete_dataset(
     Complete pipeline to prepare BraTS2020 dataset for both segmentation and CycleGAN training
     
     Args:
+        training_data_path (str): Path to raw training data
+        validation_data_path (str): Path to raw validation data
         processed_training_path (str): Path to save preprocessed training data
         processed_validation_path (str): Path to save preprocessed validation data
         split_data_path (str): Path to save split training data
@@ -454,28 +457,47 @@ def create_complete_dataset(
 
 
 if __name__ == "__main__":
-
-    # Example usage with the actual path structure
-    RAW_TRAINING_PATH = "brats20-dataset"
-    RAW_VALIDATION_PATH = "brats20-dataset"
-
-    PROCESSED_TRAINING_PATH = "processed_data/brats128_training"
-    PROCESSED_VALIDATION_PATH = "processed_data/brats128_validation"
-    SPLIT_DATA_PATH = "processed_data/brats128_split"
-    CYCLEGAN_DATA_PATH = "processed_data/brats128_cyclegan"
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Process BraTS2020 dataset for segmentation and CycleGAN')
     
-    import time
+    # Input paths with defaults pointing to /data directories
+    parser.add_argument('--input_train', type=str, default='/data/BraTS2020_TrainingData', 
+                        help='Path to raw training data (default: /data/BraTS2020_TrainingData)')
+    parser.add_argument('--input_val', type=str, default='/data/BraTS2020_ValidationData', 
+                        help='Path to raw validation data (default: /data/BraTS2020_ValidationData)')
+    
+    # Output paths
+    parser.add_argument('--output_base', type=str, default='/data/processed',
+                        help='Base directory for all output folders (default: /data/processed)')
+    
+    # Optional parameters
+    parser.add_argument('--train_ratio', type=float, default=0.75,
+                        help='Ratio for training/validation split (default: 0.75)')
+    parser.add_argument('--workers', type=int, default=None,
+                        help='Number of parallel workers (default: CPU count - 1)')
+    
+    args = parser.parse_args()
+    
+    # Create derived output paths based on the base output directory
+    output_base = Path(args.output_base)
+    output_base.mkdir(parents=True, exist_ok=True)
+    
+    PROCESSED_TRAINING_PATH = str(output_base / 'brats128_training')
+    PROCESSED_VALIDATION_PATH = str(output_base / 'brats128_validation')
+    SPLIT_DATA_PATH = str(output_base / 'brats128_split')
+    CYCLEGAN_DATA_PATH = str(output_base / 'brats128_cyclegan')
+    
     start_time = time.time()
     
     create_complete_dataset(
-        training_data_path=RAW_TRAINING_PATH,
-        validation_data_path=RAW_VALIDATION_PATH,
+        training_data_path=args.input_train,
+        validation_data_path=args.input_val,
         processed_training_path=PROCESSED_TRAINING_PATH,
         processed_validation_path=PROCESSED_VALIDATION_PATH,
         split_data_path=SPLIT_DATA_PATH,
         cyclegan_data_path=CYCLEGAN_DATA_PATH,
-        train_ratio=0.75,
-        num_workers=4
+        train_ratio=args.train_ratio,
+        num_workers=args.workers
     )
     
     print(f"Total processing time: {time.time() - start_time:.2f} seconds")
