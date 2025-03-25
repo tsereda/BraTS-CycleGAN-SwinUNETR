@@ -62,14 +62,14 @@ def process_single_case(case_data, output_path, min_label_ratio=0.007, has_mask=
         temp_image_t2 = temp_image_t2.astype(np.float32)
         temp_image_t1 = temp_image_t1.astype(np.float32)
         
-        # Pre-crop to reduce memory footprint before normalization
-        temp_image_flair = temp_image_flair[56:184, 56:184, 13:141]
-        temp_image_t1ce = temp_image_t1ce[56:184, 56:184, 13:141]
-        temp_image_t2 = temp_image_t2[56:184, 56:184, 13:141]
-        temp_image_t1 = temp_image_t1[56:184, 56:184, 13:141]
-        
+        # Pre-crop to reduce memory footprint before normalization - wider crop window
+        temp_image_flair = temp_image_flair[40:200, 40:200, 10:145]
+        temp_image_t1ce = temp_image_t1ce[40:200, 40:200, 10:145]
+        temp_image_t2 = temp_image_t2[40:200, 40:200, 10:145]
+        temp_image_t1 = temp_image_t1[40:200, 40:200, 10:145]
+
         if has_mask:
-            temp_mask = temp_mask[56:184, 56:184, 13:141]
+            temp_mask = temp_mask[40:200, 40:200, 10:145]
             
             # Check if case has enough non-zero labels early to avoid unnecessary processing
             val, counts = np.unique(temp_mask, return_counts=True)
