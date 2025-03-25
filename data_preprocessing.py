@@ -1,246 +1,503 @@
 import os
-import glob
-import json
+import numpy as np
+import nibabel as nib
 from pathlib import Path
+import json
+import glob
+import shutil
+from typing import Tuple, List, Dict
+import splitfolders
+import multiprocessing
+from functools import partial
+import time
+import sys
 import argparse
 
 
-def count_dataset_cases(base_path):
+def process_single_case(case_data, output_path, min_label_ratio=0.007, has_mask=True): 
     """
-    Count the number of cases in a dataset directory
-    """
-    print(f"\n=== Counting cases in {base_path} ===")
+    Process a single case with optimized operations
     
-    # Check if the base path exists
-    if not os.path.exists(base_path):
-        print(f"ERROR: Path {base_path} does not exist!")
-        return 0
-    
-    # Count images
-    image_path = os.path.join(base_path, "images")
-    if os.path.exists(image_path):
-        image_files = glob.glob(os.path.join(image_path, "*.npy"))
-        image_count = len(image_files)
-        print(f"Found {image_count} image files")
+    Args:
+        case_data (tuple): Tuple containing (case_idx, flair_path, t1ce_path, t2_path, t1_path, mask_path)
+                          If has_mask=False, mask_path can be None
+        output_path (str): Path to save preprocessed data
+        min_label_ratio (float): Minimum ratio of non-zero labels required
+        has_mask (bool): Whether the case has a segmentation mask
         
-        # Extract unique case IDs from filenames
-        case_ids = set()
-        for img_file in image_files:
-            # Extract case ID (e.g., BraTS20_Training_001 from image_BraTS20_Training_001.npy)
-            case_id = os.path.basename(img_file).replace("image_", "").replace(".npy", "")
-            case_ids.add(case_id)
-            
-        print(f"Found {len(case_ids)} unique cases")
-        return len(case_ids)
+    Returns:
+        tuple: (status, case_id) where status is True if valid, False if error, None if skipped
+    """
+    if has_mask:
+        case_idx, flair_path, t1ce_path, t2_path, t1_path, mask_path = case_data
     else:
-        print(f"ERROR: Images directory not found at {image_path}")
-        return 0
-
-
-def count_split_dataset(base_path):
-    """
-    Count the number of cases in a split dataset (train/val)
-    """
-    print(f"\n=== Counting cases in split dataset {base_path} ===")
+        case_idx, flair_path, t1ce_path, t2_path, t1_path = case_data
+        mask_path = None
     
-    # Check if the base path exists
-    if not os.path.exists(base_path):
-        print(f"ERROR: Path {base_path} does not exist!")
-        return {"train": 0, "val": 0, "total": 0}
+    # Extract case_id from directory name
+    case_id = os.path.basename(os.path.dirname(t2_path))
     
-    # Count train cases
-    train_path = os.path.join(base_path, "train", "images")
-    if os.path.exists(train_path):
-        train_files = glob.glob(os.path.join(train_path, "*.npy"))
-        train_count = len(train_files)
+    try:
+        # For better output from multiple processes
+        sys.stdout.write(f"Starting to process {case_id}...\n")
+        sys.stdout.flush()
         
-        # Extract unique case IDs
-        train_case_ids = set()
-        for img_file in train_files:
-            case_id = os.path.basename(img_file).replace("image_", "").replace(".npy", "")
-            train_case_ids.add(case_id)
-            
-        print(f"Found {len(train_case_ids)} unique training cases")
-    else:
-        print(f"ERROR: Training images directory not found at {train_path}")
-        train_case_ids = set()
-    
-    # Count validation cases
-    val_path = os.path.join(base_path, "val", "images")
-    if os.path.exists(val_path):
-        val_files = glob.glob(os.path.join(val_path, "*.npy"))
-        val_count = len(val_files)
+        # Load modalities and explicitly convert to the right types
+        temp_image_flair = nib.load(flair_path).get_fdata()
+        temp_image_t1ce = nib.load(t1ce_path).get_fdata()
+        temp_image_t2 = nib.load(t2_path).get_fdata()
+        temp_image_t1 = nib.load(t1_path).get_fdata()
         
-        # Extract unique case IDs
-        val_case_ids = set()
-        for img_file in val_files:
-            case_id = os.path.basename(img_file).replace("image_", "").replace(".npy", "")
-            val_case_ids.add(case_id)
+        # Load mask if available
+        if has_mask:
+            temp_mask = nib.load(mask_path).get_fdata()
+            # Convert mask to uint8 for memory efficiency
+            temp_mask = temp_mask.astype(np.uint8)
+            # Remap label 4 to 3 (following BraTS convention)
+            temp_mask[temp_mask == 4] = 3
+        
+        # Explicitly convert to float32 (important for in-place operations)
+        temp_image_flair = temp_image_flair.astype(np.float32)
+        temp_image_t1ce = temp_image_t1ce.astype(np.float32)
+        temp_image_t2 = temp_image_t2.astype(np.float32)
+        temp_image_t1 = temp_image_t1.astype(np.float32)
+        
+        # Pre-crop to reduce memory footprint before normalization - wider crop window
+        temp_image_flair = temp_image_flair[40:200, 40:200, 10:145]
+        temp_image_t1ce = temp_image_t1ce[40:200, 40:200, 10:145]
+        temp_image_t2 = temp_image_t2[40:200, 40:200, 10:145]
+        temp_image_t1 = temp_image_t1[40:200, 40:200, 10:145]
+
+        if has_mask:
+            temp_mask = temp_mask[40:200, 40:200, 10:145]
             
-        print(f"Found {len(val_case_ids)} unique validation cases")
-    else:
-        print(f"ERROR: Validation images directory not found at {val_path}")
-        val_case_ids = set()
-    
-    # Check if there's any overlap (there shouldn't be)
-    overlap = train_case_ids.intersection(val_case_ids)
-    if overlap:
-        print(f"WARNING: Found {len(overlap)} cases that appear in both train and validation sets!")
-    
-    total_cases = len(train_case_ids) + len(val_case_ids)
-    print(f"Total unique cases in split dataset: {total_cases}")
-    
-    return {
-        "train": len(train_case_ids), 
-        "val": len(val_case_ids), 
-        "total": total_cases
-    }
+            # Check if case has enough non-zero labels early to avoid unnecessary processing
+            val, counts = np.unique(temp_mask, return_counts=True)
+            
+            if (1 - (counts[0]/counts.sum())) <= min_label_ratio:
+                sys.stdout.write(f"Case {case_id} skipped: insufficient non-zero labels\n")
+                sys.stdout.flush()
+                return None, case_id  # Not enough non-zero labels
+        
+        # Optimize normalization using vectorized operations
+        # Use in-place operations to reduce memory usage
+        for img in [temp_image_flair, temp_image_t1ce, temp_image_t2, temp_image_t1]:
+            # Verify data type to prevent errors
+            if not np.issubdtype(img.dtype, np.floating):
+                img = img.astype(np.float32)
+                
+            min_val = np.min(img)
+            max_val = np.max(img)
+            if max_val > min_val:  # Avoid division by zero
+                img -= min_val
+                img /= (max_val - min_val)
+        
+        # Stack modalities (flair, t1ce, t2, t1) - more memory efficient than separate operations
+        temp_combined_images = np.stack([temp_image_flair, temp_image_t1ce, temp_image_t2, temp_image_t1], axis=3)
+        
+        # Save the processed files
+        np.save(
+            Path(output_path) / 'images' / f'image_{case_id}.npy',
+            temp_combined_images
+        )
+        
+        if has_mask:
+            np.save(
+                Path(output_path) / 'masks' / f'mask_{case_id}.npy',
+                temp_mask
+            )
+        
+        sys.stdout.write(f"Case {case_id} processed successfully\n")
+        sys.stdout.flush()
+        return True, case_id
+        
+    except Exception as e:
+        sys.stdout.write(f"Error processing {case_id}: {str(e)}\n")
+        sys.stdout.flush()
+        return False, case_id
 
 
-def count_raw_dataset(base_path):
+def preprocess_brats2020(input_path: str, output_path: str, num_workers: int = None, dataset_type: str = "training", has_mask: bool = True):
     """
-    Count the number of cases in the raw dataset
+    Preprocess BraTS2020 dataset with parallel processing for speed
+    
+    Args:
+        input_path (str): Path to raw BraTS2020 dataset (BraTS20_Training_* or BraTS20_Validation_*)
+        output_path (str): Path to save preprocessed data
+        num_workers (int): Number of parallel workers (defaults to CPU count - 1)
+        dataset_type (str): Either "training" or "validation"
+        has_mask (bool): Whether the dataset has segmentation masks
     """
-    print(f"\n=== Counting raw dataset cases in {base_path} ===")
+    print(f"Starting preprocessing of BraTS2020 {dataset_type} dataset...")
+    print(f"Input path: {input_path}")
     
-    # Check if the path exists
-    if not os.path.exists(base_path):
-        print(f"ERROR: Path {base_path} does not exist!")
-        return 0
+    # Determine number of workers (use 1 less than CPU count to avoid system freeze)
+    if num_workers is None:
+        num_workers = max(1, multiprocessing.cpu_count() - 1)
     
-    # Count patient directories
-    pattern = "BraTS20_*"
-    patient_dirs = glob.glob(os.path.join(base_path, pattern))
+    # Create output directories
+    output_path = Path(output_path)
+    output_path.mkdir(parents=True, exist_ok=True)
+    (output_path / 'images').mkdir(exist_ok=True)
+    
+    if has_mask:
+        (output_path / 'masks').mkdir(exist_ok=True)
+    
+    # Find all directories
+    print("Scanning for input files...")
+    
+    # Determine directory pattern based on dataset type
+    dir_pattern = f'BraTS20_{dataset_type.capitalize()}_*' if dataset_type.lower() in ['training', 'validation'] else 'BraTS20_*'
+    
+    patient_dirs = sorted(glob.glob(f'{input_path}/{dir_pattern}'))
     
     # If no directories found with this pattern, try searching subdirectories
     if not patient_dirs:
-        print(f"No directories found with pattern '{pattern}'. Trying to search in subdirectories...")
-        patient_dirs = glob.glob(os.path.join(base_path, "**", pattern), recursive=True)
+        print(f"No directories found with pattern '{dir_pattern}'. Trying to search in subdirectories...")
+        patient_dirs = sorted(glob.glob(f'{input_path}/**/{dir_pattern}', recursive=True))
     
-    # Only count directories
     patient_dirs = [d for d in patient_dirs if os.path.isdir(d)]
+    
+    if not patient_dirs:
+        print(f"ERROR: No patient directories found matching pattern '{dir_pattern}'")
+        return {"valid_cases": [], "skipped_cases": []}
     
     print(f"Found {len(patient_dirs)} patient directories")
     
-    # Get the highest case number to estimate total expected cases
-    max_case_num = 0
-    for dir_path in patient_dirs:
-        try:
-            dir_name = os.path.basename(dir_path)
-            case_num = int(dir_name.split('_')[-1])
-            max_case_num = max(max_case_num, case_num)
-        except:
-            pass
+    # Process all patient directories
+    case_data = []
     
-    if max_case_num > 0:
-        print(f"Highest case number found: {max_case_num}")
+    for idx, patient_dir in enumerate(patient_dirs):
+        patient_id = os.path.basename(patient_dir)
+        
+        # Define paths for each modality file
+        flair_file = os.path.join(patient_dir, f"{patient_id}_flair.nii.gz")
+        t1ce_file = os.path.join(patient_dir, f"{patient_id}_t1ce.nii.gz")
+        t2_file = os.path.join(patient_dir, f"{patient_id}_t2.nii.gz")
+        t1_file = os.path.join(patient_dir, f"{patient_id}_t1.nii.gz")
+        
+        if has_mask:
+            mask_file = os.path.join(patient_dir, f"{patient_id}_seg.nii.gz")
+            
+            # Check if all necessary files exist
+            if all(os.path.exists(f) for f in [flair_file, t1ce_file, t2_file, t1_file, mask_file]):
+                case_data.append((idx, flair_file, t1ce_file, t2_file, t1_file, mask_file))
+            else:
+                # Try alternative file extensions (.nii instead of .nii.gz)
+                flair_file = os.path.join(patient_dir, f"{patient_id}_flair.nii")
+                t1ce_file = os.path.join(patient_dir, f"{patient_id}_t1ce.nii")
+                t2_file = os.path.join(patient_dir, f"{patient_id}_t2.nii")
+                t1_file = os.path.join(patient_dir, f"{patient_id}_t1.nii")
+                mask_file = os.path.join(patient_dir, f"{patient_id}_seg.nii")
+                
+                if all(os.path.exists(f) for f in [flair_file, t1ce_file, t2_file, t1_file, mask_file]):
+                    case_data.append((idx, flair_file, t1ce_file, t2_file, t1_file, mask_file))
+                else:
+                    print(f"Warning: Missing files for {patient_id}. Skipping.")
+        else:
+            # For validation data without masks
+            if all(os.path.exists(f) for f in [flair_file, t1ce_file, t2_file, t1_file]):
+                case_data.append((idx, flair_file, t1ce_file, t2_file, t1_file))
+            else:
+                # Try alternative file extensions (.nii instead of .nii.gz)
+                flair_file = os.path.join(patient_dir, f"{patient_id}_flair.nii")
+                t1ce_file = os.path.join(patient_dir, f"{patient_id}_t1ce.nii")
+                t2_file = os.path.join(patient_dir, f"{patient_id}_t2.nii")
+                t1_file = os.path.join(patient_dir, f"{patient_id}_t1.nii")
+                
+                if all(os.path.exists(f) for f in [flair_file, t1ce_file, t2_file, t1_file]):
+                    case_data.append((idx, flair_file, t1ce_file, t2_file, t1_file))
+                else:
+                    print(f"Warning: Missing files for {patient_id}. Skipping.")
     
-    return len(patient_dirs)
-
-
-def check_processing_results(processed_path, dataset_type="training"):
-    """
-    Check the processing_results_{dataset_type}.json file if it exists
-    """
-    results_file = os.path.join(processed_path, f"processing_results_{dataset_type}.json")
-    if os.path.exists(results_file):
-        try:
-            with open(results_file, 'r') as f:
-                results = json.load(f)
+    print(f"Found {len(case_data)} complete cases out of {len(patient_dirs)} directories")
+    
+    if len(case_data) == 0:
+        print("ERROR: No valid cases found for processing!")
+        return {"valid_cases": [], "skipped_cases": []}
+    
+    processed_files = {'valid_cases': [], 'skipped_cases': []}
+    
+    # Process cases
+    print(f"Processing {len(case_data)} cases...")
+    print(f"Using parallel processing with {num_workers} workers...")
+    
+    # Process first case separately to catch any setup issues early
+    if case_data:
+        print("Processing first case to check for issues...")
+        first_status, first_case_id = process_single_case(case_data[0], output_path, has_mask=has_mask)
+        
+        if first_status is True:
+            processed_files['valid_cases'].append(first_case_id)
+        elif first_status is False:
+            processed_files['skipped_cases'].append(first_case_id)
+        
+        # Process remaining cases in parallel
+        remaining_case_data = case_data[1:]
+        print(f"Processing remaining {len(remaining_case_data)} cases in parallel...")
+        
+        if remaining_case_data:
+            # Set up the parallel processing function
+            process_func = partial(process_single_case, output_path=output_path, has_mask=has_mask)
             
-            valid_cases = len(results.get('valid_cases', []))
-            skipped_cases = len(results.get('skipped_cases', []))
+            # Process in smaller batches to avoid memory issues
+            batch_size = min(32, len(remaining_case_data))
+            batches = [remaining_case_data[i:i+batch_size] for i in range(0, len(remaining_case_data), batch_size)]
             
-            print(f"\n=== Processing Results from {results_file} ===")
-            print(f"Valid cases: {valid_cases}")
-            print(f"Skipped cases: {skipped_cases}")
-            print(f"Total processed: {valid_cases + skipped_cases}")
+            total_processed = len(processed_files['valid_cases']) + len(processed_files['skipped_cases'])
             
-            return {"valid": valid_cases, "skipped": skipped_cases, "total": valid_cases + skipped_cases}
-        except Exception as e:
-            print(f"Error reading processing results: {str(e)}")
+            for batch_idx, batch in enumerate(batches):
+                # Use a context manager to ensure proper cleanup of resources
+                with multiprocessing.Pool(processes=num_workers) as pool:
+                    batch_results = pool.map(process_func, batch)
+                
+                # Process batch results
+                valid_in_batch = 0
+                for status, case_id in batch_results:
+                    if status is True:
+                        processed_files['valid_cases'].append(case_id)
+                        valid_in_batch += 1
+                    elif status is False:
+                        processed_files['skipped_cases'].append(case_id)
+                
+                total_processed = len(processed_files['valid_cases']) + len(processed_files['skipped_cases'])
+                progress_percent = (total_processed / len(case_data)) * 100
+                
+                print(f"Batch {batch_idx+1}/{len(batches)} ({valid_in_batch}/{len(batch)} valid cases) - Overall: {total_processed}/{len(case_data)} ({progress_percent:.1f}%) processed")
     else:
-        print(f"Processing results file not found: {results_file}")
+        print("No cases found to process!")
     
-    return None
+    # Save processing results
+    with open(output_path / f'processing_results_{dataset_type}.json', 'w') as f:
+        json.dump(processed_files, f, indent=2)
+    
+    print(f"Preprocessing complete. Processed {len(processed_files['valid_cases'])} valid cases.")
+    print(f"Skipped {len(processed_files['skipped_cases'])} cases.")
+    
+    return processed_files
 
 
-def main():
+def split_dataset(input_folder: str, output_folder: str, train_ratio: float = 0.75):
     """
-    Main function to count all datasets
+    Split preprocessed dataset into training and validation sets
+    
+    Args:
+        input_folder (str): Path to preprocessed data
+        output_folder (str): Path to save split data
+        train_ratio (float): Ratio of training data
     """
+    print(f"Splitting dataset with train ratio: {train_ratio}")
+    
+    # Check if there are actually files to split
+    image_count = len(glob.glob(f"{input_folder}/images/*.npy"))
+    mask_count = len(glob.glob(f"{input_folder}/masks/*.npy"))
+    
+    if image_count == 0 or mask_count == 0:
+        print(f"WARNING: No files found to split! Images: {image_count}, Masks: {mask_count}")
+        return
+    
+    # Split with a ratio
+    splitfolders.ratio(
+        input_folder, 
+        output=output_folder, 
+        seed=42, 
+        ratio=(train_ratio, 1-train_ratio), 
+        group_prefix=None
+    )
+    
+    # Count files in each split
+    train_images = len(glob.glob(f"{output_folder}/train/images/*.npy"))
+    val_images = len(glob.glob(f"{output_folder}/val/images/*.npy"))
+    
+    print(f"Dataset split complete:")
+    print(f"  Training: {train_images} images")
+    print(f"  Validation: {val_images} images")
+
+
+def create_cyclegan_dataset(train_split_path: str, validation_data_path: str, cyclegan_output_path: str):
+    """
+    Create a dataset for CycleGAN training by combining 75% training split (no masks) with validation data
+    
+    Args:
+        train_split_path (str): Path to the train split from the training data
+        validation_data_path (str): Path to the processed validation data
+        cyclegan_output_path (str): Path to save the combined CycleGAN dataset
+    """
+    print(f"Creating CycleGAN dataset...")
+    
+    # Create output directory
+    cyclegan_path = Path(cyclegan_output_path)
+    cyclegan_path.mkdir(parents=True, exist_ok=True)
+    
+    # Create subdirectories for CycleGAN
+    (cyclegan_path / 'images').mkdir(exist_ok=True)
+    
+    # Copy training split images (75% of original training)
+    train_images = glob.glob(f"{train_split_path}/train/images/*.npy")
+    
+    print(f"Copying {len(train_images)} training images...")
+    for img_path in train_images:
+        shutil.copy2(img_path, cyclegan_path / 'images')
+    
+    # Copy validation images
+    val_images = glob.glob(f"{validation_data_path}/images/*.npy")
+    
+    print(f"Copying {len(val_images)} validation images...")
+    for img_path in val_images:
+        shutil.copy2(img_path, cyclegan_path / 'images')
+    
+    # Count total files
+    total_images = len(glob.glob(f"{cyclegan_output_path}/images/*.npy"))
+    
+    print(f"CycleGAN dataset creation complete:")
+    print(f"  Total images: {total_images}")
+
+
+def create_complete_dataset(
+    training_data_path: str,
+    validation_data_path: str,
+    processed_training_path: str,
+    processed_validation_path: str,
+    split_data_path: str,
+    cyclegan_data_path: str,
+    train_ratio: float = 0.75,
+    num_workers: int = None
+):
+    """
+    Complete pipeline to prepare BraTS2020 dataset for both segmentation and CycleGAN training
+    
+    Args:
+        training_data_path (str): Path to raw training data
+        validation_data_path (str): Path to raw validation data
+        processed_training_path (str): Path to save preprocessed training data
+        processed_validation_path (str): Path to save preprocessed validation data
+        split_data_path (str): Path to save split training data
+        cyclegan_data_path (str): Path to save combined data for CycleGAN
+        train_ratio (float): Ratio of training data for splitting
+        num_workers (int): Number of parallel workers
+    """
+    print(f"=== STARTING COMPLETE DATASET PREPARATION ===")
+    
+    # Step 1: Preprocess the training dataset (with masks)
+    print("\n=== STEP 1: PREPROCESSING TRAINING DATA ===")
+    # Search for training directories
+    training_dirs = sorted(glob.glob(f'{training_data_path}/BraTS20_Training_*'))
+    if training_dirs:
+        print(f"Found {len(training_dirs)} training directories")
+        training_processed = preprocess_brats2020(
+            training_data_path, 
+            processed_training_path, 
+            num_workers,
+            dataset_type="training",
+            has_mask=True
+        )
+        print(f"Training data processed: {len(training_processed['valid_cases'])} valid cases")
+    else:
+        print(f"WARNING: No training directories found. Skipping training data preprocessing.")
+    
+    # Step 2: Preprocess the validation dataset
+    print("\n=== STEP 2: PREPROCESSING VALIDATION DATA ===")
+    # Search for validation directories
+    validation_dirs = sorted(glob.glob(f'{validation_data_path}/BraTS20_Validation_*'))
+    
+    if validation_dirs:
+        print(f"Found {len(validation_dirs)} validation directories")
+        # Check for the presence of mask files in the first validation directory
+        first_dir = validation_dirs[0]
+        dir_basename = os.path.basename(first_dir)
+        mask_path_gz = os.path.join(first_dir, f"{dir_basename}_seg.nii.gz")
+        mask_path = os.path.join(first_dir, f"{dir_basename}_seg.nii")
+        
+        has_mask_validation = os.path.exists(mask_path_gz) or os.path.exists(mask_path)
+        print(f"Validation data has masks: {has_mask_validation}")
+        
+        validation_processed = preprocess_brats2020(
+            validation_data_path, 
+            processed_validation_path, 
+            num_workers,
+            dataset_type="validation",
+            has_mask=has_mask_validation
+        )
+        print(f"Validation data processed: {len(validation_processed['valid_cases'])} valid cases")
+    else:
+        print(f"WARNING: No validation directories found. Skipping validation data preprocessing.")
+    
+    # Step 3: Split training data into train/val
+    print("\n=== STEP 3: SPLITTING TRAINING DATA ===")
+    # Check if there's processed training data to split
+    train_images = len(glob.glob(f"{processed_training_path}/images/*.npy"))
+    train_masks = len(glob.glob(f"{processed_training_path}/masks/*.npy"))
+    
+    if train_images > 0 and train_masks > 0:
+        print(f"Found {train_images} training images and {train_masks} masks to split")
+        split_dataset(processed_training_path, split_data_path, train_ratio)
+    else:
+        print(f"WARNING: No training data found to split. Skipping split step.")
+    
+    # Step 4: Create CycleGAN dataset (75% training + validation)
+    print("\n=== STEP 4: CREATING CYCLEGAN DATASET ===")
+    # Check if there's training split and validation data
+    train_split_images = len(glob.glob(f"{split_data_path}/train/images/*.npy")) if os.path.exists(f"{split_data_path}/train/images") else 0
+    val_images = len(glob.glob(f"{processed_validation_path}/images/*.npy"))
+    
+    if train_split_images > 0 or val_images > 0:
+        print(f"Found {train_split_images} training split images and {val_images} validation images")
+        create_cyclegan_dataset(
+            split_data_path,
+            processed_validation_path,
+            cyclegan_data_path
+        )
+    else:
+        print(f"WARNING: No data found for CycleGAN dataset. Skipping CycleGAN dataset creation.")
+    
+    print(f"\n=== COMPLETE DATASET PREPARATION FINISHED ===")
+
+    print(f"1. Segmentation training data: {split_data_path}")
+    print(f"2. CycleGAN training data: {cyclegan_data_path}")
+
+
+if __name__ == "__main__":
     # Parse command line arguments
-    parser = argparse.ArgumentParser(description='Count BraTS2020 dataset cases in various processing stages')
+    parser = argparse.ArgumentParser(description='Process BraTS2020 dataset for segmentation and CycleGAN')
     
     # Input paths with defaults pointing to /data directories
-    parser.add_argument('--input_train', type=str, 
-                        default='/data/BraTS2020_TrainingData/MICCAI_BraTS2020_TrainingData', 
+    parser.add_argument('--input_train', type=str, default='/data/BraTS2020_TrainingData/MICCAI_BraTS2020_TrainingData', 
                         help='Path to raw training data (default: /data/BraTS2020_TrainingData/MICCAI_BraTS2020_TrainingData)')
-    parser.add_argument('--input_val', type=str, 
-                        default='/data/BraTS2020_ValidationData/MICCAI_BraTS2020_ValidationData', 
+    parser.add_argument('--input_val', type=str, default='/data/BraTS2020_ValidationData/MICCAI_BraTS2020_ValidationData)', 
                         help='Path to raw validation data (default: /data/BraTS2020_ValidationData/MICCAI_BraTS2020_ValidationData)')
     
-    # Output base path
+    # Output paths
     parser.add_argument('--output_base', type=str, default='/data/processed',
                         help='Base directory for all output folders (default: /data/processed)')
+    
+    # Optional parameters
+    parser.add_argument('--train_ratio', type=float, default=0.75,
+                        help='Ratio for training/validation split (default: 0.75)')
+    parser.add_argument('--workers', type=int, default=None,
+                        help='Number of parallel workers (default: CPU count - 1)')
     
     args = parser.parse_args()
     
     # Create derived output paths based on the base output directory
     output_base = Path(args.output_base)
+    output_base.mkdir(parents=True, exist_ok=True)
     
-    # Use the same path structure as in the preprocessing script
     PROCESSED_TRAINING_PATH = str(output_base / 'brats128_training')
     PROCESSED_VALIDATION_PATH = str(output_base / 'brats128_validation')
     SPLIT_DATA_PATH = str(output_base / 'brats128_split')
     CYCLEGAN_DATA_PATH = str(output_base / 'brats128_cyclegan')
     
-    # Print the paths being used
-    print("\n=== PATHS BEING USED ===")
-    print(f"Raw Training Data: {args.input_train}")
-    print(f"Raw Validation Data: {args.input_val}")
-    print(f"Processed Training Data: {PROCESSED_TRAINING_PATH}")
-    print(f"Processed Validation Data: {PROCESSED_VALIDATION_PATH}")
-    print(f"Split Dataset: {SPLIT_DATA_PATH}")
-    print(f"CycleGAN Dataset: {CYCLEGAN_DATA_PATH}")
+    start_time = time.time()
     
-    # Count raw datasets
-    print("\n=== COUNTING RAW DATASETS ===")
-    raw_training_count = count_raw_dataset(args.input_train)
-    raw_validation_count = count_raw_dataset(args.input_val)
+    create_complete_dataset(
+        training_data_path=args.input_train,
+        validation_data_path=args.input_val,
+        processed_training_path=PROCESSED_TRAINING_PATH,
+        processed_validation_path=PROCESSED_VALIDATION_PATH,
+        split_data_path=SPLIT_DATA_PATH,
+        cyclegan_data_path=CYCLEGAN_DATA_PATH,
+        train_ratio=args.train_ratio,
+        num_workers=args.workers
+    )
     
-    # Count processed datasets
-    print("\n=== COUNTING PROCESSED DATASETS ===")
-    processed_training_count = count_dataset_cases(PROCESSED_TRAINING_PATH)
-    processed_validation_count = count_dataset_cases(PROCESSED_VALIDATION_PATH)
-    
-    # Check processing results if available
-    training_results = check_processing_results(PROCESSED_TRAINING_PATH, "training")
-    validation_results = check_processing_results(PROCESSED_VALIDATION_PATH, "validation")
-    
-    # Count split dataset
-    split_counts = count_split_dataset(SPLIT_DATA_PATH)
-    
-    # Count CycleGAN dataset
-    cyclegan_count = count_dataset_cases(CYCLEGAN_DATA_PATH)
-    
-    # Print summary
-    print("\n=== DATASET COUNT SUMMARY ===")
-    print(f"Raw Training Cases: {raw_training_count}")
-    print(f"Raw Validation Cases: {raw_validation_count}")
-    print(f"Processed Training Cases: {processed_training_count}")
-    print(f"Processed Validation Cases: {processed_validation_count}")
-    print(f"Split Dataset - Training Cases: {split_counts['train']}")
-    print(f"Split Dataset - Validation Cases: {split_counts['val']}")
-    print(f"CycleGAN Dataset Cases: {cyclegan_count}")
-    
-    # Calculate total cases for CycleGAN (should be train + validation)
-    expected_cyclegan = split_counts['train'] + processed_validation_count
-    if cyclegan_count != expected_cyclegan:
-        print(f"WARNING: CycleGAN dataset count ({cyclegan_count}) doesn't match expected count ({expected_cyclegan})")
-    else:
-        print(f"CycleGAN dataset count matches expected count (train split + validation = {expected_cyclegan})")
-
-
-if __name__ == "__main__":
-    main()
+    print(f"Total processing time: {time.time() - start_time:.2f} seconds") 
