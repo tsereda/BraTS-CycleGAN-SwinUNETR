@@ -12,6 +12,57 @@ from functools import partial
 import time
 import sys
 import argparse
+from tqdm import tqdm
+
+
+def copy_file(src_dst):
+    """
+    Copy a single file from source to destination
+    
+    Args:
+        src_dst (tuple): Tuple containing (source_path, destination_path)
+        
+    Returns:
+        str: Source path of copied file
+    """
+    src, dst = src_dst
+    try:
+        shutil.copy2(src, dst)
+        return src
+    except Exception as e:
+        print(f"Error copying {src} to {dst}: {str(e)}")
+        return None
+
+
+def parallel_copy(file_list, dest_dir, num_workers=None):
+    """
+    Copy files in parallel using multiprocessing
+    
+    Args:
+        file_list (list): List of file paths to copy
+        dest_dir (str): Destination directory
+        num_workers (int): Number of parallel workers
+        
+    Returns:
+        list: List of successfully copied file paths
+    """
+    if num_workers is None:
+        num_workers = max(1, multiprocessing.cpu_count() - 1)
+    
+    print(f"Copying {len(file_list)} files using {num_workers} workers...")
+    
+    # Create source-destination pairs
+    src_dst_pairs = [(f, dest_dir) for f in file_list]
+    
+    # Use multiprocessing to copy files in parallel
+    with multiprocessing.Pool(processes=num_workers) as pool:
+        results = list(pool.map(copy_file, src_dst_pairs))
+    
+    # Filter out None values (failed copies)
+    successful_copies = [r for r in results if r is not None]
+    
+    print(f"Successfully copied {len(successful_copies)} of {len(file_list)} files")
+    return successful_copies
 
 
 def process_single_case(case_data, output_path, min_label_ratio=0.007, has_mask=True): 
@@ -314,16 +365,22 @@ def split_dataset(input_folder: str, output_folder: str, train_ratio: float = 0.
     print(f"  Validation: {val_images} images")
 
 
-def create_cyclegan_dataset(train_split_path: str, validation_data_path: str, cyclegan_output_path: str):
+def create_cyclegan_dataset(train_split_path: str, validation_data_path: str, cyclegan_output_path: str, num_workers: int = None):
     """
     Create a dataset for CycleGAN training by combining 75% training split (no masks) with validation data
+    Using parallel file copying for improved performance
     
     Args:
         train_split_path (str): Path to the train split from the training data
         validation_data_path (str): Path to the processed validation data
         cyclegan_output_path (str): Path to save the combined CycleGAN dataset
+        num_workers (int): Number of parallel workers for copying files
     """
     print(f"Creating CycleGAN dataset...")
+    
+    # Determine number of workers if not provided
+    if num_workers is None:
+        num_workers = max(1, multiprocessing.cpu_count() - 1)
     
     # Create output directory
     cyclegan_path = Path(cyclegan_output_path)
@@ -332,19 +389,21 @@ def create_cyclegan_dataset(train_split_path: str, validation_data_path: str, cy
     # Create subdirectories for CycleGAN
     (cyclegan_path / 'images').mkdir(exist_ok=True)
     
-    # Copy training split images (75% of original training)
+    # Get file lists
     train_images = glob.glob(f"{train_split_path}/train/images/*.npy")
-    
-    print(f"Copying {len(train_images)} training images...")
-    for img_path in train_images:
-        shutil.copy2(img_path, cyclegan_path / 'images')
-    
-    # Copy validation images
     val_images = glob.glob(f"{validation_data_path}/images/*.npy")
     
-    print(f"Copying {len(val_images)} validation images...")
-    for img_path in val_images:
-        shutil.copy2(img_path, cyclegan_path / 'images')
+    print(f"Found {len(train_images)} training images and {len(val_images)} validation images")
+    
+    # Copy training split images (75% of original training) in parallel
+    if train_images:
+        print(f"Copying training images...")
+        parallel_copy(train_images, cyclegan_path / 'images', num_workers)
+    
+    # Copy validation images in parallel
+    if val_images:
+        print(f"Copying validation images...")
+        parallel_copy(val_images, cyclegan_path / 'images', num_workers)
     
     # Count total files
     total_images = len(glob.glob(f"{cyclegan_output_path}/images/*.npy"))
@@ -434,7 +493,7 @@ def create_complete_dataset(
     else:
         print(f"WARNING: No training data found to split. Skipping split step.")
     
-    # Step 4: Create CycleGAN dataset (75% training + validation)
+    # Step 4: Create CycleGAN dataset (75% training + validation) with parallel copying
     print("\n=== STEP 4: CREATING CYCLEGAN DATASET ===")
     # Check if there's training split and validation data
     train_split_images = len(glob.glob(f"{split_data_path}/train/images/*.npy")) if os.path.exists(f"{split_data_path}/train/images") else 0
@@ -445,7 +504,8 @@ def create_complete_dataset(
         create_cyclegan_dataset(
             split_data_path,
             processed_validation_path,
-            cyclegan_data_path
+            cyclegan_data_path,
+            num_workers
         )
     else:
         print(f"WARNING: No data found for CycleGAN dataset. Skipping CycleGAN dataset creation.")
@@ -500,4 +560,4 @@ if __name__ == "__main__":
         num_workers=args.workers
     )
     
-    print(f"Total processing time: {time.time() - start_time:.2f} seconds") 
+    print(f"Total processing time: {time.time() - start_time:.2f} seconds")
