@@ -5,6 +5,7 @@ from pathlib import Path
 import json
 import glob
 import shutil
+import subprocess
 from typing import Tuple, List, Dict
 import splitfolders
 import multiprocessing
@@ -13,56 +14,6 @@ import time
 import sys
 import argparse
 from tqdm import tqdm
-
-
-def copy_file(src_dst):
-    """
-    Copy a single file from source to destination
-    
-    Args:
-        src_dst (tuple): Tuple containing (source_path, destination_path)
-        
-    Returns:
-        str: Source path of copied file
-    """
-    src, dst = src_dst
-    try:
-        shutil.copy2(src, dst)
-        return src
-    except Exception as e:
-        print(f"Error copying {src} to {dst}: {str(e)}")
-        return None
-
-
-def parallel_copy(file_list, dest_dir, num_workers=None):
-    """
-    Copy files in parallel using multiprocessing
-    
-    Args:
-        file_list (list): List of file paths to copy
-        dest_dir (str): Destination directory
-        num_workers (int): Number of parallel workers
-        
-    Returns:
-        list: List of successfully copied file paths
-    """
-    if num_workers is None:
-        num_workers = max(1, multiprocessing.cpu_count() - 1)
-    
-    print(f"Copying {len(file_list)} files using {num_workers} workers...")
-    
-    # Create source-destination pairs
-    src_dst_pairs = [(f, dest_dir) for f in file_list]
-    
-    # Use multiprocessing to copy files in parallel
-    with multiprocessing.Pool(processes=num_workers) as pool:
-        results = list(pool.map(copy_file, src_dst_pairs))
-    
-    # Filter out None values (failed copies)
-    successful_copies = [r for r in results if r is not None]
-    
-    print(f"Successfully copied {len(successful_copies)} of {len(file_list)} files")
-    return successful_copies
 
 
 def process_single_case(case_data, output_path, min_label_ratio=0.007, has_mask=True): 
@@ -168,14 +119,13 @@ def process_single_case(case_data, output_path, min_label_ratio=0.007, has_mask=
         return False, case_id
 
 
-def preprocess_brats2020(input_path: str, output_path: str, num_workers: int = None, dataset_type: str = "training", has_mask: bool = True):
+def preprocess_brats2020(input_path: str, output_path: str, dataset_type: str = "training", has_mask: bool = True):
     """
     Preprocess BraTS2020 dataset with parallel processing for speed
     
     Args:
         input_path (str): Path to raw BraTS2020 dataset (BraTS20_Training_* or BraTS20_Validation_*)
         output_path (str): Path to save preprocessed data
-        num_workers (int): Number of parallel workers (defaults to CPU count - 1)
         dataset_type (str): Either "training" or "validation"
         has_mask (bool): Whether the dataset has segmentation masks
     """
@@ -183,8 +133,7 @@ def preprocess_brats2020(input_path: str, output_path: str, num_workers: int = N
     print(f"Input path: {input_path}")
     
     # Determine number of workers (use 1 less than CPU count to avoid system freeze)
-    if num_workers is None:
-        num_workers = max(1, multiprocessing.cpu_count() - 1)
+    num_workers = max(1, multiprocessing.cpu_count() - 1)
     
     # Create output directories
     output_path = Path(output_path)
@@ -328,16 +277,17 @@ def preprocess_brats2020(input_path: str, output_path: str, num_workers: int = N
     return processed_files
 
 
-def split_dataset(input_folder: str, output_folder: str, train_ratio: float = 0.75):
+def split_dataset(input_folder: str, output_folder: str):
     """
-    Split preprocessed dataset into training and validation sets
+    Split preprocessed dataset into training and validation sets with fixed 0.9 train ratio
     
     Args:
         input_folder (str): Path to preprocessed data
         output_folder (str): Path to save split data
-        train_ratio (float): Ratio of training data
     """
-    print(f"Splitting dataset with train ratio: {train_ratio}")
+    # Hardcoded train ratio to 0.9
+    train_ratio = 0.9
+    print(f"Splitting dataset with fixed train ratio: {train_ratio}")
     
     # Check if there are actually files to split
     image_count = len(glob.glob(f"{input_folder}/images/*.npy"))
@@ -365,22 +315,17 @@ def split_dataset(input_folder: str, output_folder: str, train_ratio: float = 0.
     print(f"  Validation: {val_images} images")
 
 
-def create_cyclegan_dataset(train_split_path: str, validation_data_path: str, cyclegan_output_path: str, num_workers: int = None):
+def create_cyclegan_dataset(train_split_path: str, validation_data_path: str, cyclegan_output_path: str):
     """
-    Create a dataset for CycleGAN training by combining 75% training split (no masks) with validation data
-    Using parallel file copying for improved performance
+    Create a dataset for CycleGAN training by combining 90% training split (no masks) with validation data
+    Using rsync for fast bulk file copying
     
     Args:
         train_split_path (str): Path to the train split from the training data
         validation_data_path (str): Path to the processed validation data
         cyclegan_output_path (str): Path to save the combined CycleGAN dataset
-        num_workers (int): Number of parallel workers for copying files
     """
     print(f"Creating CycleGAN dataset...")
-    
-    # Determine number of workers if not provided
-    if num_workers is None:
-        num_workers = max(1, multiprocessing.cpu_count() - 1)
     
     # Create output directory
     cyclegan_path = Path(cyclegan_output_path)
@@ -389,21 +334,85 @@ def create_cyclegan_dataset(train_split_path: str, validation_data_path: str, cy
     # Create subdirectories for CycleGAN
     (cyclegan_path / 'images').mkdir(exist_ok=True)
     
-    # Get file lists
+    # Get file lists for checking
     train_images = glob.glob(f"{train_split_path}/train/images/*.npy")
     val_images = glob.glob(f"{validation_data_path}/images/*.npy")
     
     print(f"Found {len(train_images)} training images and {len(val_images)} validation images")
     
-    # Copy training split images (75% of original training) in parallel
-    if train_images:
-        print(f"Copying training images...")
-        parallel_copy(train_images, cyclegan_path / 'images', num_workers)
+    # Use rsync for bulk copying instead of file-by-file copying
     
-    # Copy validation images in parallel
+    # Copy training images (90% of original training)
+    if train_images:
+        print(f"Bulk copying training images using rsync...")
+        train_src_dir = f"{train_split_path}/train/images/"
+        dest_dir = f"{cyclegan_path}/images/"
+        
+        try:
+            # Check if rsync is available
+            result = subprocess.run(["which", "rsync"], capture_output=True, text=True)
+            rsync_available = result.returncode == 0
+            
+            if rsync_available:
+                # Use rsync for fast copying
+                subprocess.run([
+                    "rsync", "-av", "--progress",
+                    train_src_dir,
+                    dest_dir
+                ], check=True)
+            else:
+                print("rsync not found, falling back to traditional copy methods...")
+                # Fallback to using cp command, which is still faster than Python's file-by-file copy
+                subprocess.run([
+                    "cp", "-r",
+                    f"{train_src_dir}*",
+                    dest_dir
+                ], check=True)
+                
+        except subprocess.SubprocessError as e:
+            print(f"Error during bulk copy of training images: {str(e)}")
+            print("Falling back to regular copy...")
+            
+            # Fallback to regular copying if subprocess fails
+            for src in train_images:
+                dest = os.path.join(dest_dir, os.path.basename(src))
+                shutil.copy2(src, dest)
+    
+    # Copy validation images
     if val_images:
-        print(f"Copying validation images...")
-        parallel_copy(val_images, cyclegan_path / 'images', num_workers)
+        print(f"Bulk copying validation images using rsync...")
+        val_src_dir = f"{validation_data_path}/images/"
+        dest_dir = f"{cyclegan_path}/images/"
+        
+        try:
+            # Check if rsync is available
+            result = subprocess.run(["which", "rsync"], capture_output=True, text=True)
+            rsync_available = result.returncode == 0
+            
+            if rsync_available:
+                # Use rsync for fast copying
+                subprocess.run([
+                    "rsync", "-av", "--progress",
+                    val_src_dir,
+                    dest_dir
+                ], check=True)
+            else:
+                print("rsync not found, falling back to traditional copy methods...")
+                # Fallback to using cp command
+                subprocess.run([
+                    "cp", "-r",
+                    f"{val_src_dir}*",
+                    dest_dir
+                ], check=True)
+                
+        except subprocess.SubprocessError as e:
+            print(f"Error during bulk copy of validation images: {str(e)}")
+            print("Falling back to regular copy...")
+            
+            # Fallback to regular copying if subprocess fails
+            for src in val_images:
+                dest = os.path.join(dest_dir, os.path.basename(src))
+                shutil.copy2(src, dest)
     
     # Count total files
     total_images = len(glob.glob(f"{cyclegan_output_path}/images/*.npy"))
@@ -418,9 +427,7 @@ def create_complete_dataset(
     processed_training_path: str,
     processed_validation_path: str,
     split_data_path: str,
-    cyclegan_data_path: str,
-    train_ratio: float = 0.75,
-    num_workers: int = None
+    cyclegan_data_path: str
 ):
     """
     Complete pipeline to prepare BraTS2020 dataset for both segmentation and CycleGAN training
@@ -432,8 +439,6 @@ def create_complete_dataset(
         processed_validation_path (str): Path to save preprocessed validation data
         split_data_path (str): Path to save split training data
         cyclegan_data_path (str): Path to save combined data for CycleGAN
-        train_ratio (float): Ratio of training data for splitting
-        num_workers (int): Number of parallel workers
     """
     print(f"=== STARTING COMPLETE DATASET PREPARATION ===")
     
@@ -445,8 +450,7 @@ def create_complete_dataset(
         print(f"Found {len(training_dirs)} training directories")
         training_processed = preprocess_brats2020(
             training_data_path, 
-            processed_training_path, 
-            num_workers,
+            processed_training_path,
             dataset_type="training",
             has_mask=True
         )
@@ -472,8 +476,7 @@ def create_complete_dataset(
         
         validation_processed = preprocess_brats2020(
             validation_data_path, 
-            processed_validation_path, 
-            num_workers,
+            processed_validation_path,
             dataset_type="validation",
             has_mask=has_mask_validation
         )
@@ -481,19 +484,19 @@ def create_complete_dataset(
     else:
         print(f"WARNING: No validation directories found. Skipping validation data preprocessing.")
     
-    # Step 3: Split training data into train/val
-    print("\n=== STEP 3: SPLITTING TRAINING DATA ===")
+    # Step 3: Split training data into train/val with fixed 0.9 ratio
+    print("\n=== STEP 3: SPLITTING TRAINING DATA (90/10 SPLIT) ===")
     # Check if there's processed training data to split
     train_images = len(glob.glob(f"{processed_training_path}/images/*.npy"))
     train_masks = len(glob.glob(f"{processed_training_path}/masks/*.npy"))
     
     if train_images > 0 and train_masks > 0:
         print(f"Found {train_images} training images and {train_masks} masks to split")
-        split_dataset(processed_training_path, split_data_path, train_ratio)
+        split_dataset(processed_training_path, split_data_path)
     else:
         print(f"WARNING: No training data found to split. Skipping split step.")
     
-    # Step 4: Create CycleGAN dataset (75% training + validation) with parallel copying
+    # Step 4: Create CycleGAN dataset (90% training + validation) with rsync
     print("\n=== STEP 4: CREATING CYCLEGAN DATASET ===")
     # Check if there's training split and validation data
     train_split_images = len(glob.glob(f"{split_data_path}/train/images/*.npy")) if os.path.exists(f"{split_data_path}/train/images") else 0
@@ -504,8 +507,7 @@ def create_complete_dataset(
         create_cyclegan_dataset(
             split_data_path,
             processed_validation_path,
-            cyclegan_data_path,
-            num_workers
+            cyclegan_data_path
         )
     else:
         print(f"WARNING: No data found for CycleGAN dataset. Skipping CycleGAN dataset creation.")
@@ -530,12 +532,6 @@ if __name__ == "__main__":
     parser.add_argument('--output_base', type=str, default='/data/processed',
                         help='Base directory for all output folders (default: /data/processed)')
     
-    # Optional parameters
-    parser.add_argument('--train_ratio', type=float, default=0.75,
-                        help='Ratio for training/validation split (default: 0.75)')
-    parser.add_argument('--workers', type=int, default=None,
-                        help='Number of parallel workers (default: CPU count - 1)')
-    
     args = parser.parse_args()
     
     # Create derived output paths based on the base output directory
@@ -555,9 +551,7 @@ if __name__ == "__main__":
         processed_training_path=PROCESSED_TRAINING_PATH,
         processed_validation_path=PROCESSED_VALIDATION_PATH,
         split_data_path=SPLIT_DATA_PATH,
-        cyclegan_data_path=CYCLEGAN_DATA_PATH,
-        train_ratio=args.train_ratio,
-        num_workers=args.workers
+        cyclegan_data_path=CYCLEGAN_DATA_PATH
     )
     
     print(f"Total processing time: {time.time() - start_time:.2f} seconds")
