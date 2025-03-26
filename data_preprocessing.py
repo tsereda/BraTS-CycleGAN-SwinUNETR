@@ -530,7 +530,7 @@ if __name__ == "__main__":
     
     # Output paths
     parser.add_argument('--output_base', type=str, default='/data/processed',
-                        help='Base directory for all output folders (default: /data/processed)')
+                        help='Base directory for all output folders (default: ~/processed)')
     
     args = parser.parse_args()
     

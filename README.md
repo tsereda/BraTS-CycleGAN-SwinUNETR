@@ -70,6 +70,8 @@ Each patient case also includes expert segmentation of three tumor regions:
 ### 1. Data Preprocessing
 
 ```bash
+cp /data/brats20-dataset-training-validation.zip ~/brats20-dataset-training-validation.zip
+
 python data_preprocessing.py
 ```
 
