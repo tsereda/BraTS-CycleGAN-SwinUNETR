@@ -2,8 +2,6 @@ import os
 import glob
 import json
 from pathlib import Path
-import argparse
-
 
 def count_dataset_cases(base_path):
     """
@@ -35,7 +33,6 @@ def count_dataset_cases(base_path):
     else:
         print(f"ERROR: Images directory not found at {image_path}")
         return 0
-
 
 def count_split_dataset(base_path):
     """
@@ -96,7 +93,6 @@ def count_split_dataset(base_path):
         "total": total_cases
     }
 
-
 def count_raw_dataset(base_path):
     """
     Count the number of cases in the raw dataset
@@ -109,13 +105,14 @@ def count_raw_dataset(base_path):
         return 0
     
     # Count patient directories
-    pattern = "BraTS20_*"
-    patient_dirs = glob.glob(os.path.join(base_path, pattern))
-    
-    # If no directories found with this pattern, try searching subdirectories
-    if not patient_dirs:
-        print(f"No directories found with pattern '{pattern}'. Trying to search in subdirectories...")
-        patient_dirs = glob.glob(os.path.join(base_path, "**", pattern), recursive=True)
+    if "Training" in base_path:
+        patient_dirs = glob.glob(os.path.join(base_path, "BraTS20_Training_*"))
+    elif "Validation" in base_path:
+        patient_dirs = glob.glob(os.path.join(base_path, "BraTS20_Validation_*"))
+    else:
+        # Try both patterns
+        patient_dirs = glob.glob(os.path.join(base_path, "BraTS20_Training_*")) + \
+                       glob.glob(os.path.join(base_path, "BraTS20_Validation_*"))
     
     # Only count directories
     patient_dirs = [d for d in patient_dirs if os.path.isdir(d)]
@@ -137,12 +134,11 @@ def count_raw_dataset(base_path):
     
     return len(patient_dirs)
 
-
-def check_processing_results(processed_path, dataset_type="training"):
+def check_processing_results(processed_path):
     """
-    Check the processing_results_{dataset_type}.json file if it exists
+    Check the processing_results.json file if it exists
     """
-    results_file = os.path.join(processed_path, f"processing_results_{dataset_type}.json")
+    results_file = os.path.join(processed_path, "processing_results.json")
     if os.path.exists(results_file):
         try:
             with open(results_file, 'r') as f:
@@ -159,53 +155,27 @@ def check_processing_results(processed_path, dataset_type="training"):
             return {"valid": valid_cases, "skipped": skipped_cases, "total": valid_cases + skipped_cases}
         except Exception as e:
             print(f"Error reading processing results: {str(e)}")
-    else:
-        print(f"Processing results file not found: {results_file}")
     
     return None
-
 
 def main():
     """
     Main function to count all datasets
     """
-    # Parse command line arguments
-    parser = argparse.ArgumentParser(description='Count BraTS2020 dataset cases in various processing stages')
+    # Raw dataset paths
+    RAW_TRAINING_PATH = "~/BraTS2020_TrainingData/MICCAI_BraTS2020_TrainingData"
+    RAW_VALIDATION_PATH = "~/BraTS2020_ValidationData/MICCAI_BraTS2020_ValidationData"
     
-    # Input paths with defaults pointing to /data directories
-    parser.add_argument('--input_train', type=str, default='/data/BraTS2020_TrainingData', 
-                        help='Path to raw training data (default: /data/BraTS2020_TrainingData)')
-    parser.add_argument('--input_val', type=str, default='/data/BraTS2020_ValidationData', 
-                        help='Path to raw validation data (default: /data/BraTS2020_ValidationData)')
-    
-    # Output base path
-    parser.add_argument('--output_base', type=str, default='/data/processed',
-                        help='Base directory for all output folders (default: /data/processed)')
-    
-    args = parser.parse_args()
-    
-    # Create derived output paths based on the base output directory
-    output_base = Path(args.output_base)
-    
-    # Use the same path structure as in the preprocessing script
-    PROCESSED_TRAINING_PATH = str(output_base / 'brats128_training')
-    PROCESSED_VALIDATION_PATH = str(output_base / 'brats128_validation')
-    SPLIT_DATA_PATH = str(output_base / 'brats128_split')
-    CYCLEGAN_DATA_PATH = str(output_base / 'brats128_cyclegan')
-    
-    # Print the paths being used
-    print("\n=== PATHS BEING USED ===")
-    print(f"Raw Training Data: {args.input_train}")
-    print(f"Raw Validation Data: {args.input_val}")
-    print(f"Processed Training Data: {PROCESSED_TRAINING_PATH}")
-    print(f"Processed Validation Data: {PROCESSED_VALIDATION_PATH}")
-    print(f"Split Dataset: {SPLIT_DATA_PATH}")
-    print(f"CycleGAN Dataset: {CYCLEGAN_DATA_PATH}")
+    # Processed dataset paths
+    PROCESSED_TRAINING_PATH = "processed/brats128_training"
+    PROCESSED_VALIDATION_PATH = "processed/brats128_validation"
+    SPLIT_DATA_PATH = "processed/brats128_split"
+    CYCLEGAN_DATA_PATH = "processed/brats128_cyclegan"
     
     # Count raw datasets
     print("\n=== COUNTING RAW DATASETS ===")
-    raw_training_count = count_raw_dataset(args.input_train)
-    raw_validation_count = count_raw_dataset(args.input_val)
+    raw_training_count = count_raw_dataset(RAW_TRAINING_PATH)
+    raw_validation_count = count_raw_dataset(RAW_VALIDATION_PATH)
     
     # Count processed datasets
     print("\n=== COUNTING PROCESSED DATASETS ===")
@@ -213,8 +183,8 @@ def main():
     processed_validation_count = count_dataset_cases(PROCESSED_VALIDATION_PATH)
     
     # Check processing results if available
-    training_results = check_processing_results(PROCESSED_TRAINING_PATH, "training")
-    validation_results = check_processing_results(PROCESSED_VALIDATION_PATH, "validation")
+    training_results = check_processing_results(PROCESSED_TRAINING_PATH)
+    validation_results = check_processing_results(PROCESSED_VALIDATION_PATH)
     
     # Count split dataset
     split_counts = count_split_dataset(SPLIT_DATA_PATH)
@@ -238,7 +208,6 @@ def main():
         print(f"WARNING: CycleGAN dataset count ({cyclegan_count}) doesn't match expected count ({expected_cyclegan})")
     else:
         print(f"CycleGAN dataset count matches expected count (train split + validation = {expected_cyclegan})")
-
 
 if __name__ == "__main__":
     main()
