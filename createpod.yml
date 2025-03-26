@@ -64,6 +64,8 @@ spec:
     volumeMounts:
     - name: git-repo
       mountPath: /opt/repo
+    - name: local-processing
+      mountPath: /local-processing
     resources:
       limits:
         memory: 307Mi
@@ -74,6 +76,8 @@ spec:
 
   volumes:
   - name: git-repo
+    emptyDir: {}
+  - name: local-processing
     emptyDir: {}
   - name: brats-data-volume #Change this
     persistentVolumeClaim:
