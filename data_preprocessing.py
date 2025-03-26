@@ -529,7 +529,7 @@ if __name__ == "__main__":
                         help='Path to raw validation data (default: /data/BraTS2020_ValidationData/MICCAI_BraTS2020_ValidationData)')
     
     # Output paths
-    parser.add_argument('--output_base', type=str, default='/data/processed',
+    parser.add_argument('--output_base', type=str, default='~/processed',
                         help='Base directory for all output folders (default: ~/processed)')
     
     args = parser.parse_args()
