@@ -577,6 +577,10 @@ if __name__ == "__main__":
     parser.add_argument('--output_base', type=str, default='~/processed',
                         help='Base directory for all output folders (default: ~/processed)')
     
+    # Crop margin parameter
+    parser.add_argument('--crop_margin', type=int, default=35,
+                        help='Margin to use for cropping (smaller = less aggressive crop, default: 35)')
+    
     args = parser.parse_args()
     
     # Create derived output paths based on the base output directory
@@ -586,7 +590,7 @@ if __name__ == "__main__":
     PROCESSED_TRAINING_PATH = str(output_base / 'brats128_training')
     PROCESSED_VALIDATION_PATH = str(output_base / 'brats128_validation')
     SPLIT_DATA_PATH = str(output_base / 'brats128_split')
-    CYCLEGAN_DATA_PATH = str(output_base / 'brats128_cyclegan')
+    FINAL_CYCLEGAN_PATH = str(output_base / 'brats128_cyclegan')
     
     start_time = time.time()
     
@@ -596,7 +600,8 @@ if __name__ == "__main__":
         processed_training_path=PROCESSED_TRAINING_PATH,
         processed_validation_path=PROCESSED_VALIDATION_PATH,
         split_data_path=SPLIT_DATA_PATH,
-        cyclegan_data_path=CYCLEGAN_DATA_PATH
+        final_cyclegan_path=FINAL_CYCLEGAN_PATH,
+        crop_margin=args.crop_margin
     )
     
     print(f"Total processing time: {time.time() - start_time:.2f} seconds")
