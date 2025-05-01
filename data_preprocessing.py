@@ -7,16 +7,16 @@ import glob
 import shutil
 import subprocess
 from typing import Tuple, List, Dict
-import splitfolders
 import multiprocessing
 from functools import partial
 import time
 import sys
 import argparse
 from tqdm import tqdm
+import random
 
 
-def process_single_case(case_data, output_path, min_label_ratio=0.007, has_mask=True): 
+def process_single_case(case_data, output_path, min_label_ratio=0.007, has_mask=True, crop_margin=35): 
     """
     Process a single case with optimized operations
     
@@ -26,6 +26,7 @@ def process_single_case(case_data, output_path, min_label_ratio=0.007, has_mask=
         output_path (str): Path to save preprocessed data
         min_label_ratio (float): Minimum ratio of non-zero labels required
         has_mask (bool): Whether the case has a segmentation mask
+        crop_margin (int): Margin to use for cropping (smaller value = less aggressive crop)
         
     Returns:
         tuple: (status, case_id) where status is True if valid, False if error, None if skipped
@@ -64,14 +65,26 @@ def process_single_case(case_data, output_path, min_label_ratio=0.007, has_mask=
         temp_image_t2 = temp_image_t2.astype(np.float32)
         temp_image_t1 = temp_image_t1.astype(np.float32)
         
-        # Pre-crop to reduce memory footprint before normalization - wider crop window
-        temp_image_flair = temp_image_flair[40:200, 40:200, 10:145]
-        temp_image_t1ce = temp_image_t1ce[40:200, 40:200, 10:145]
-        temp_image_t2 = temp_image_t2[40:200, 40:200, 10:145]
-        temp_image_t1 = temp_image_t1[40:200, 40:200, 10:145]
+        # Get dimensions of the original image
+        orig_dims = temp_image_flair.shape
+        
+        # Calculate crop boundaries - less aggressive crop
+        # These values are adjusted from the original 40:200, 40:200, 10:145
+        x_start = max(0, crop_margin)
+        x_end = min(orig_dims[0] - crop_margin, 240 - crop_margin)  # assuming 240x240 images
+        y_start = max(0, crop_margin)
+        y_end = min(orig_dims[1] - crop_margin, 240 - crop_margin)
+        z_start = max(0, crop_margin // 2)  # Less margin for z-axis
+        z_end = min(orig_dims[2] - (crop_margin // 2), 155 - (crop_margin // 2))  # assuming 155 slices
+        
+        # Pre-crop to reduce memory footprint before normalization - less aggressive crop
+        temp_image_flair = temp_image_flair[x_start:x_end, y_start:y_end, z_start:z_end]
+        temp_image_t1ce = temp_image_t1ce[x_start:x_end, y_start:y_end, z_start:z_end]
+        temp_image_t2 = temp_image_t2[x_start:x_end, y_start:y_end, z_start:z_end]
+        temp_image_t1 = temp_image_t1[x_start:x_end, y_start:y_end, z_start:z_end]
 
         if has_mask:
-            temp_mask = temp_mask[40:200, 40:200, 10:145]
+            temp_mask = temp_mask[x_start:x_end, y_start:y_end, z_start:z_end]
             
             # Check if case has enough non-zero labels early to avoid unnecessary processing
             val, counts = np.unique(temp_mask, return_counts=True)
@@ -119,7 +132,7 @@ def process_single_case(case_data, output_path, min_label_ratio=0.007, has_mask=
         return False, case_id
 
 
-def preprocess_brats2020(input_path: str, output_path: str, dataset_type: str = "training", has_mask: bool = True):
+def preprocess_brats2020(input_path: str, output_path: str, dataset_type: str = "training", has_mask: bool = True, crop_margin: int = 35):
     """
     Preprocess BraTS2020 dataset with parallel processing for speed
     
@@ -128,9 +141,11 @@ def preprocess_brats2020(input_path: str, output_path: str, dataset_type: str = 
         output_path (str): Path to save preprocessed data
         dataset_type (str): Either "training" or "validation"
         has_mask (bool): Whether the dataset has segmentation masks
+        crop_margin (int): Margin to use for cropping (smaller value = less aggressive crop)
     """
     print(f"Starting preprocessing of BraTS2020 {dataset_type} dataset...")
     print(f"Input path: {input_path}")
+    print(f"Crop margin: {crop_margin} (smaller = less cropping)")
     
     # Determine number of workers (use 1 less than CPU count to avoid system freeze)
     num_workers = max(1, multiprocessing.cpu_count() - 1)
@@ -225,7 +240,7 @@ def preprocess_brats2020(input_path: str, output_path: str, dataset_type: str = 
     # Process first case separately to catch any setup issues early
     if case_data:
         print("Processing first case to check for issues...")
-        first_status, first_case_id = process_single_case(case_data[0], output_path, has_mask=has_mask)
+        first_status, first_case_id = process_single_case(case_data[0], output_path, has_mask=has_mask, crop_margin=crop_margin)
         
         if first_status is True:
             processed_files['valid_cases'].append(first_case_id)
@@ -238,7 +253,7 @@ def preprocess_brats2020(input_path: str, output_path: str, dataset_type: str = 
         
         if remaining_case_data:
             # Set up the parallel processing function
-            process_func = partial(process_single_case, output_path=output_path, has_mask=has_mask)
+            process_func = partial(process_single_case, output_path=output_path, has_mask=has_mask, crop_margin=crop_margin)
             
             # Process in smaller batches to avoid memory issues
             batch_size = min(32, len(remaining_case_data))
@@ -277,148 +292,165 @@ def preprocess_brats2020(input_path: str, output_path: str, dataset_type: str = 
     return processed_files
 
 
-def split_dataset(input_folder: str, output_folder: str):
+def split_dataset_three_way(input_folder: str, output_folder: str, seg_ratio=0.4, cyclegan_ratio=0.4, test_ratio=0.2):
     """
-    Split preprocessed dataset into training and validation sets with fixed 0.9 train ratio
+    Split preprocessed dataset into three non-overlapping sets: segmentation, cyclegan, and test
     
     Args:
         input_folder (str): Path to preprocessed data
         output_folder (str): Path to save split data
+        seg_ratio (float): Ratio for segmentation training
+        cyclegan_ratio (float): Ratio for cyclegan training
+        test_ratio (float): Ratio for test set
     """
-    # Hardcoded train ratio to 0.9
-    train_ratio = 0.9
-    print(f"Splitting dataset with fixed train ratio: {train_ratio}")
+    print(f"Splitting dataset with ratios: Segmentation={seg_ratio}, CycleGAN={cyclegan_ratio}, Test={test_ratio}")
     
     # Check if there are actually files to split
-    image_count = len(glob.glob(f"{input_folder}/images/*.npy"))
-    mask_count = len(glob.glob(f"{input_folder}/masks/*.npy"))
+    image_files = glob.glob(f"{input_folder}/images/*.npy")
+    mask_files = glob.glob(f"{input_folder}/masks/*.npy")
+    
+    image_count = len(image_files)
+    mask_count = len(mask_files)
     
     if image_count == 0 or mask_count == 0:
         print(f"WARNING: No files found to split! Images: {image_count}, Masks: {mask_count}")
         return
     
-    # Split with a ratio
-    splitfolders.ratio(
-        input_folder, 
-        output=output_folder, 
-        seed=42, 
-        ratio=(train_ratio, 1-train_ratio), 
-        group_prefix=None
-    )
+    # Get case IDs from filenames
+    case_ids = [os.path.basename(f).replace('image_', '').replace('.npy', '') for f in image_files]
+    
+    # Shuffle case IDs to randomize the split
+    random.seed(42)  # For reproducibility
+    random.shuffle(case_ids)
+    
+    # Calculate split sizes
+    seg_count = int(image_count * seg_ratio)
+    cyclegan_count = int(image_count * cyclegan_ratio)
+    test_count = image_count - seg_count - cyclegan_count
+    
+    # Split case IDs
+    seg_cases = case_ids[:seg_count]
+    cyclegan_cases = case_ids[seg_count:seg_count+cyclegan_count]
+    test_cases = case_ids[seg_count+cyclegan_count:]
+    
+    print(f"Split counts: Segmentation={len(seg_cases)}, CycleGAN={len(cyclegan_cases)}, Test={len(test_cases)}")
+    
+    # Create output directories
+    output_path = Path(output_folder)
+    output_path.mkdir(parents=True, exist_ok=True)
+    
+    # Create directories for each split
+    (output_path / 'segmentation' / 'images').mkdir(parents=True, exist_ok=True)
+    (output_path / 'segmentation' / 'masks').mkdir(parents=True, exist_ok=True)
+    (output_path / 'cyclegan' / 'images').mkdir(parents=True, exist_ok=True)
+    (output_path / 'test' / 'images').mkdir(parents=True, exist_ok=True)
+    (output_path / 'test' / 'masks').mkdir(parents=True, exist_ok=True)
+    
+    # Copy files to respective directories
+    input_path = Path(input_folder)
+    
+    # Copy segmentation files
+    print(f"Copying files for segmentation dataset...")
+    for case_id in seg_cases:
+        # Copy image and mask for segmentation
+        src_img = input_path / 'images' / f"image_{case_id}.npy"
+        dst_img = output_path / 'segmentation' / 'images' / f"image_{case_id}.npy"
+        
+        src_mask = input_path / 'masks' / f"mask_{case_id}.npy"
+        dst_mask = output_path / 'segmentation' / 'masks' / f"mask_{case_id}.npy"
+        
+        if os.path.exists(src_img) and os.path.exists(src_mask):
+            shutil.copy2(src_img, dst_img)
+            shutil.copy2(src_mask, dst_mask)
+    
+    # Copy cyclegan files
+    print(f"Copying files for CycleGAN dataset...")
+    for case_id in cyclegan_cases:
+        # Copy only image for cyclegan
+        src_img = input_path / 'images' / f"image_{case_id}.npy"
+        dst_img = output_path / 'cyclegan' / 'images' / f"image_{case_id}.npy"
+        
+        if os.path.exists(src_img):
+            shutil.copy2(src_img, dst_img)
+    
+    # Copy test files
+    print(f"Copying files for test dataset...")
+    for case_id in test_cases:
+        # Copy image and mask for test set
+        src_img = input_path / 'images' / f"image_{case_id}.npy"
+        dst_img = output_path / 'test' / 'images' / f"image_{case_id}.npy"
+        
+        src_mask = input_path / 'masks' / f"mask_{case_id}.npy"
+        dst_mask = output_path / 'test' / 'masks' / f"mask_{case_id}.npy"
+        
+        if os.path.exists(src_img) and os.path.exists(src_mask):
+            shutil.copy2(src_img, dst_img)
+            shutil.copy2(src_mask, dst_mask)
     
     # Count files in each split
-    train_images = len(glob.glob(f"{output_folder}/train/images/*.npy"))
-    val_images = len(glob.glob(f"{output_folder}/val/images/*.npy"))
+    seg_images = len(glob.glob(f"{output_folder}/segmentation/images/*.npy"))
+    seg_masks = len(glob.glob(f"{output_folder}/segmentation/masks/*.npy"))
+    cyclegan_images = len(glob.glob(f"{output_folder}/cyclegan/images/*.npy"))
+    test_images = len(glob.glob(f"{output_folder}/test/images/*.npy"))
+    test_masks = len(glob.glob(f"{output_folder}/test/masks/*.npy"))
     
     print(f"Dataset split complete:")
-    print(f"  Training: {train_images} images")
-    print(f"  Validation: {val_images} images")
+    print(f"  Segmentation: {seg_images} images, {seg_masks} masks")
+    print(f"  CycleGAN: {cyclegan_images} images")
+    print(f"  Test: {test_images} images, {test_masks} masks")
+    
+    # Save case IDs for each split for reference
+    split_info = {
+        'segmentation': seg_cases,
+        'cyclegan': cyclegan_cases,
+        'test': test_cases
+    }
+    
+    with open(output_path / 'split_info.json', 'w') as f:
+        json.dump(split_info, f, indent=2)
+    
+    return split_info
 
 
-def create_cyclegan_dataset(train_split_path: str, validation_data_path: str, cyclegan_output_path: str):
+def merge_cyclegan_datasets(training_cyclegan_path: str, validation_data_path: str, output_path: str):
     """
-    Create a dataset for CycleGAN training by combining 90% training split (no masks) with validation data
-    Using rsync for fast bulk file copying
+    Merge CycleGAN images from training split with validation data
     
     Args:
-        train_split_path (str): Path to the train split from the training data
+        training_cyclegan_path (str): Path to CycleGAN images from training split
         validation_data_path (str): Path to the processed validation data
-        cyclegan_output_path (str): Path to save the combined CycleGAN dataset
+        output_path (str): Path to save the combined CycleGAN dataset
     """
-    print(f"Creating CycleGAN dataset...")
+    print(f"Merging CycleGAN datasets...")
     
     # Create output directory
-    cyclegan_path = Path(cyclegan_output_path)
-    cyclegan_path.mkdir(parents=True, exist_ok=True)
+    output_path = Path(output_path)
+    output_path.mkdir(parents=True, exist_ok=True)
+    (output_path / 'images').mkdir(exist_ok=True)
     
-    # Create subdirectories for CycleGAN
-    (cyclegan_path / 'images').mkdir(exist_ok=True)
-    
-    # Get file lists for checking
-    train_images = glob.glob(f"{train_split_path}/train/images/*.npy")
+    # Get file lists
+    train_images = glob.glob(f"{training_cyclegan_path}/images/*.npy")
     val_images = glob.glob(f"{validation_data_path}/images/*.npy")
     
     print(f"Found {len(train_images)} training images and {len(val_images)} validation images")
     
-    # Use rsync for bulk copying instead of file-by-file copying
-    
-    # Copy training images (90% of original training)
-    if train_images:
-        print(f"Bulk copying training images using rsync...")
-        train_src_dir = f"{train_split_path}/train/images/"
-        dest_dir = f"{cyclegan_path}/images/"
-        
-        try:
-            # Check if rsync is available
-            result = subprocess.run(["which", "rsync"], capture_output=True, text=True)
-            rsync_available = result.returncode == 0
-            
-            if rsync_available:
-                # Use rsync for fast copying
-                subprocess.run([
-                    "rsync", "-av", "--progress",
-                    train_src_dir,
-                    dest_dir
-                ], check=True)
-            else:
-                print("rsync not found, falling back to traditional copy methods...")
-                # Fallback to using cp command, which is still faster than Python's file-by-file copy
-                subprocess.run([
-                    "cp", "-r",
-                    f"{train_src_dir}*",
-                    dest_dir
-                ], check=True)
-                
-        except subprocess.SubprocessError as e:
-            print(f"Error during bulk copy of training images: {str(e)}")
-            print("Falling back to regular copy...")
-            
-            # Fallback to regular copying if subprocess fails
-            for src in train_images:
-                dest = os.path.join(dest_dir, os.path.basename(src))
-                shutil.copy2(src, dest)
+    # Copy training cyclegan images
+    print(f"Copying training CycleGAN images...")
+    for src in train_images:
+        dest = os.path.join(output_path / 'images', os.path.basename(src))
+        shutil.copy2(src, dest)
     
     # Copy validation images
-    if val_images:
-        print(f"Bulk copying validation images using rsync...")
-        val_src_dir = f"{validation_data_path}/images/"
-        dest_dir = f"{cyclegan_path}/images/"
-        
-        try:
-            # Check if rsync is available
-            result = subprocess.run(["which", "rsync"], capture_output=True, text=True)
-            rsync_available = result.returncode == 0
-            
-            if rsync_available:
-                # Use rsync for fast copying
-                subprocess.run([
-                    "rsync", "-av", "--progress",
-                    val_src_dir,
-                    dest_dir
-                ], check=True)
-            else:
-                print("rsync not found, falling back to traditional copy methods...")
-                # Fallback to using cp command
-                subprocess.run([
-                    "cp", "-r",
-                    f"{val_src_dir}*",
-                    dest_dir
-                ], check=True)
-                
-        except subprocess.SubprocessError as e:
-            print(f"Error during bulk copy of validation images: {str(e)}")
-            print("Falling back to regular copy...")
-            
-            # Fallback to regular copying if subprocess fails
-            for src in val_images:
-                dest = os.path.join(dest_dir, os.path.basename(src))
-                shutil.copy2(src, dest)
+    print(f"Copying validation images...")
+    for src in val_images:
+        dest = os.path.join(output_path / 'images', os.path.basename(src))
+        shutil.copy2(src, dest)
     
     # Count total files
-    total_images = len(glob.glob(f"{cyclegan_output_path}/images/*.npy"))
+    total_images = len(glob.glob(f"{output_path}/images/*.npy"))
     
     print(f"CycleGAN dataset creation complete:")
-    print(f"  Total images: {total_images}")
+    print(f"  Total images: {total_images} (from {len(train_images)} training + {len(val_images)} validation)")
 
 
 def create_complete_dataset(
@@ -427,20 +459,24 @@ def create_complete_dataset(
     processed_training_path: str,
     processed_validation_path: str,
     split_data_path: str,
-    cyclegan_data_path: str
+    final_cyclegan_path: str,
+    crop_margin: int = 35
 ):
     """
     Complete pipeline to prepare BraTS2020 dataset for both segmentation and CycleGAN training
+    with non-overlapping data splits
     
     Args:
         training_data_path (str): Path to raw training data
         validation_data_path (str): Path to raw validation data
         processed_training_path (str): Path to save preprocessed training data
         processed_validation_path (str): Path to save preprocessed validation data
-        split_data_path (str): Path to save split training data
-        cyclegan_data_path (str): Path to save combined data for CycleGAN
+        split_data_path (str): Path to save split training data (segmentation, cyclegan, test)
+        final_cyclegan_path (str): Path to save final combined cyclegan data
+        crop_margin (int): Margin to use for cropping (smaller value = less aggressive crop)
     """
     print(f"=== STARTING COMPLETE DATASET PREPARATION ===")
+    print(f"Using crop margin: {crop_margin} (smaller = less cropping)")
     
     # Step 1: Preprocess the training dataset (with masks)
     print("\n=== STEP 1: PREPROCESSING TRAINING DATA ===")
@@ -452,7 +488,8 @@ def create_complete_dataset(
             training_data_path, 
             processed_training_path,
             dataset_type="training",
-            has_mask=True
+            has_mask=True,
+            crop_margin=crop_margin
         )
         print(f"Training data processed: {len(training_processed['valid_cases'])} valid cases")
     else:
@@ -478,46 +515,54 @@ def create_complete_dataset(
             validation_data_path, 
             processed_validation_path,
             dataset_type="validation",
-            has_mask=has_mask_validation
+            has_mask=has_mask_validation,
+            crop_margin=crop_margin
         )
         print(f"Validation data processed: {len(validation_processed['valid_cases'])} valid cases")
     else:
         print(f"WARNING: No validation directories found. Skipping validation data preprocessing.")
     
-    # Step 3: Split training data into train/val with fixed 0.9 ratio
-    print("\n=== STEP 3: SPLITTING TRAINING DATA (90/10 SPLIT) ===")
+    # Step 3: Split training data into three non-overlapping sets
+    print("\n=== STEP 3: SPLITTING TRAINING DATA INTO THREE NON-OVERLAPPING SETS ===")
     # Check if there's processed training data to split
     train_images = len(glob.glob(f"{processed_training_path}/images/*.npy"))
     train_masks = len(glob.glob(f"{processed_training_path}/masks/*.npy"))
     
     if train_images > 0 and train_masks > 0:
         print(f"Found {train_images} training images and {train_masks} masks to split")
-        split_dataset(processed_training_path, split_data_path)
+        # Use 40% for segmentation, 40% for cyclegan, 20% for test
+        split_info = split_dataset_three_way(
+            processed_training_path, 
+            split_data_path,
+            seg_ratio=0.4,
+            cyclegan_ratio=0.4,
+            test_ratio=0.2
+        )
     else:
         print(f"WARNING: No training data found to split. Skipping split step.")
     
-    # Step 4: Create CycleGAN dataset (90% training + validation) with rsync
-    print("\n=== STEP 4: CREATING CYCLEGAN DATASET ===")
-    # Check if there's training split and validation data
-    train_split_images = len(glob.glob(f"{split_data_path}/train/images/*.npy")) if os.path.exists(f"{split_data_path}/train/images") else 0
+    # Step 4: Merge CycleGAN images from training with validation data
+    print("\n=== STEP 4: MERGING CYCLEGAN DATASETS ===")
+    # Check if there's training cyclegan and validation data
+    train_cyclegan_images = len(glob.glob(f"{split_data_path}/cyclegan/images/*.npy"))
     val_images = len(glob.glob(f"{processed_validation_path}/images/*.npy"))
     
-    if train_split_images > 0 or val_images > 0:
-        print(f"Found {train_split_images} training split images and {val_images} validation images")
-        create_cyclegan_dataset(
-            split_data_path,
+    if train_cyclegan_images > 0 or val_images > 0:
+        print(f"Found {train_cyclegan_images} training cyclegan images and {val_images} validation images")
+        merge_cyclegan_datasets(
+            f"{split_data_path}/cyclegan",
             processed_validation_path,
-            cyclegan_data_path
+            final_cyclegan_path
         )
     else:
         print(f"WARNING: No data found for CycleGAN dataset. Skipping CycleGAN dataset creation.")
     
     print(f"\n=== COMPLETE DATASET PREPARATION FINISHED ===")
 
-    print(f"1. Segmentation training data: {split_data_path}")
-    print(f"2. CycleGAN training data: {cyclegan_data_path}")
-
-
+    print(f"1. Segmentation training data: {split_data_path}/segmentation")
+    print(f"2. CycleGAN training data: {final_cyclegan_path}")
+    print(f"3. Test data: {split_data_path}/test")
+    
 if __name__ == "__main__":
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Process BraTS2020 dataset for segmentation and CycleGAN')
