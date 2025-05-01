@@ -5,3 +5,6 @@ processed_data/
 brats20-dataset/
 validation_visualizations/
 output/
+checkpoint_t2_flair_epoch056_20250501_032010.pth
+processed_data.tar.gz
+t2_flair_AtoB_samples_epoch057_val.png
