@@ -14,6 +14,48 @@ import sys
 import argparse
 from tqdm import tqdm
 import random
+import stat  # For permission constants
+
+
+def check_and_create_directories(paths_list, permission_mode=0o755):
+    """
+    Check and create directories with specific permissions
+    
+    Args:
+        paths_list (list): List of directory paths to check/create
+        permission_mode (int): Permission mode to set (default: 0o755 - rwxr-xr-x)
+        
+    Returns:
+        dict: Status of each directory {'path': {'exists': bool, 'writable': bool}}
+    """
+    results = {}
+    
+    for path in paths_list:
+        path_obj = Path(path)
+        status = {'exists': False, 'writable': False}
+        
+        # Check if directory exists
+        if path_obj.exists():
+            status['exists'] = True
+            
+            # Check if directory is writable
+            if os.access(path, os.W_OK):
+                status['writable'] = True
+            
+        # Create directory if it doesn't exist
+        else:
+            try:
+                path_obj.mkdir(parents=True, exist_ok=True)
+                os.chmod(path, permission_mode)
+                status['exists'] = True
+                status['writable'] = True
+                print(f"Created directory: {path}")
+            except Exception as e:
+                print(f"Error creating directory {path}: {str(e)}")
+        
+        results[path] = status
+    
+    return results
 
 
 def process_single_case(case_data, output_path, min_label_ratio=0.007, has_mask=True, crop_margin=35): 
@@ -584,13 +626,64 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     # Create derived output paths based on the base output directory
-    output_base = Path(args.output_base)
-    output_base.mkdir(parents=True, exist_ok=True)
+    output_base = Path(args.output_base).expanduser()  # Expand ~ to home directory
     
+    # Define all required directories
     PROCESSED_TRAINING_PATH = str(output_base / 'brats128_training')
     PROCESSED_VALIDATION_PATH = str(output_base / 'brats128_validation')
     SPLIT_DATA_PATH = str(output_base / 'brats128_split')
     FINAL_CYCLEGAN_PATH = str(output_base / 'brats128_cyclegan')
+    
+    # Check and create all required directories
+    print("=== CHECKING AND CREATING DIRECTORIES ===")
+    all_dirs = [
+        str(output_base),
+        PROCESSED_TRAINING_PATH,
+        PROCESSED_VALIDATION_PATH,
+        SPLIT_DATA_PATH,
+        FINAL_CYCLEGAN_PATH,
+        # Add subdirectories too
+        str(Path(PROCESSED_TRAINING_PATH) / 'images'),
+        str(Path(PROCESSED_TRAINING_PATH) / 'masks'),
+        str(Path(PROCESSED_VALIDATION_PATH) / 'images'),
+        str(Path(PROCESSED_VALIDATION_PATH) / 'masks'),
+        str(Path(SPLIT_DATA_PATH) / 'segmentation' / 'images'),
+        str(Path(SPLIT_DATA_PATH) / 'segmentation' / 'masks'),
+        str(Path(SPLIT_DATA_PATH) / 'cyclegan' / 'images'),
+        str(Path(SPLIT_DATA_PATH) / 'test' / 'images'),
+        str(Path(SPLIT_DATA_PATH) / 'test' / 'masks'),
+        str(Path(FINAL_CYCLEGAN_PATH) / 'images')
+    ]
+    
+    dir_status = check_and_create_directories(all_dirs)
+    
+    # Check for any permission issues
+    permission_issues = False
+    for path, status in dir_status.items():
+        if not status['exists'] or not status['writable']:
+            print(f"WARNING: Directory {path} has issues - exists: {status['exists']}, writable: {status['writable']}")
+            permission_issues = True
+    
+    if permission_issues:
+        print("WARNING: Some directory permission issues detected. Script may fail.")
+        sys.exit(1)  # Exit if there are permission issues
+    else:
+        print("All directories created and have proper permissions.")
+    
+    # Check read permissions for input directories
+    input_dirs = [args.input_train, args.input_val]
+    for input_dir in input_dirs:
+        if os.path.exists(input_dir):
+            if not os.access(input_dir, os.R_OK):
+                print(f"WARNING: No read permission for input directory {input_dir}")
+                permission_issues = True
+        else:
+            print(f"WARNING: Input directory {input_dir} does not exist")
+            permission_issues = True
+    
+    if permission_issues:
+        print("WARNING: Input directory issues detected. Script may fail.")
+        sys.exit(1)  # Exit if there are permission issues
     
     start_time = time.time()
     
