@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: Pod
 metadata:
-  name: brats-processing-pod1
+  name: brats-processing-pod
 spec:
   securityContext:
     runAsUser: 1000
