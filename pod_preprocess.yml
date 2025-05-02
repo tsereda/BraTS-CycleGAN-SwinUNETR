@@ -44,6 +44,7 @@ spec:
       echo "Compressing final processed data..."
       cd ${REPO_PATH} && \
       sudo tar -cf - -C processed . | pv | sudo pigz -p $(nproc) | sudo tee /data/brats-data-many/brats128_processed_$(date +%Y%m%d_%H%M%S).tar.gz > /dev/null
+      ls -lh /data/brats-data-many/
       echo "Sleeping indefinitely."
       sleep infinity
     volumeMounts:

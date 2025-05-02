@@ -21,6 +21,9 @@ spec:
         args:
         - |
           echo "Running as user: $(whoami), UID: $(id -u), GID: $(id -g)"
+          # Create output directories with correct permissions
+          mkdir -p /app/output
+          mkdir -p /app/results
           
           # Clone the repository
           git clone https://gitlab.nrp-nautilus.io/timothy.sereda/BraTS-CycleGAN-SwinUNETR ${REPO_PATH}
@@ -29,12 +32,12 @@ spec:
           # Setup Python environment
           python -m pip install --upgrade pip
           python -m pip install nibabel matplotlib tqdm tensorboard
-
+          
           # Extract dataset
           cd /data
-          sudo mkdir -p extracted_data
+          mkdir -p extracted_data
           echo "Extracting data..."
-          sudo tar -xzf brats128_processed_20250502_013316.tar.gz -C extracted_data
+          tar -xzf brats128_processed_20250502_013316.tar.gz -C extracted_data
           ls -la extracted_data
           
           # Run training script
@@ -43,20 +46,20 @@ spec:
             --batch_size=16 \
             --epochs=300 \
             --data_path /data/extracted_data \
-            --output_dir /data/output
+            --output_dir /app/output
           
           # Save results
           TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-          RESULTS_DIR="/data/results_${TIMESTAMP}"
+          RESULTS_DIR="/app/results_${TIMESTAMP}"
           mkdir -p ${RESULTS_DIR}
-          
           cp -r ${REPO_PATH}/segmentation/runs ${RESULTS_DIR}/runs || echo "No runs directory"
           cp -r ${REPO_PATH}/segmentation/models ${RESULTS_DIR}/models || echo "No models directory"
-          
           echo "Training completed at $(date)" > ${RESULTS_DIR}/summary.txt
           echo "Training parameters: workers=4, batch_size=16, epochs=300" >> ${RESULTS_DIR}/summary.txt
           
-          tar -czf ${RESULTS_DIR}.tar.gz ${RESULTS_DIR}
+          # Try to copy to data volume if possible
+          cp -r ${RESULTS_DIR} /data/ || echo "Could not copy results to /data"
+          tar -czf ${RESULTS_DIR}.tar.gz ${RESULTS_DIR} || echo "Could not create tar archive"
         volumeMounts:
         - name: git-repo
           mountPath: /app
