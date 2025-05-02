@@ -25,7 +25,6 @@ spec:
       cd ${REPO_PATH}
       git pull origin main || { echo "Failed to update git repository"; exit 1; }
       echo "Git repository updated"
-
       # Preprocessing
       echo "Copying the dataset from pvc..."
       cp /data/brats-data-many/brats20-dataset-training-validation.zip .
@@ -33,12 +32,17 @@ spec:
       mkdir -p processed
       pip install nibabel
       python3 data_preprocessing.py --input_train BraTS2020_TrainingData/MICCAI_BraTS2020_TrainingData/ --input_val BraTS2020_ValidationData/MICCAI_BraTS2020_ValidationData/
-      rm -rf BraTS2020_TrainingData BraTS2020_ValidationData brats20-dataset-training-validation.zip
       python3 validate_data.py
+      # Cleanup intermediate processed directories after validation
+      echo "Removing intermediate processing directories to save space..."
+      rm -rf processed/brats128_training processed/brats128_validation
+      echo "Keeping only final split and cyclegan datasets"
+      # Install compression tools
       sudo apt-get update && sudo apt-get install -y pigz pv
+      # Compress only the necessary processed data
+      echo "Compressing final processed data..."
       cd ${REPO_PATH} && \
       sudo tar -cf - -C processed . | pv | sudo pigz -p $(nproc) | sudo tee /data/brats-data-many/brats128_processed_$(date +%Y%m%d_%H%M%S).tar.gz > /dev/null
-      
       echo "Sleeping indefinitely."
       sleep infinity
     volumeMounts:
