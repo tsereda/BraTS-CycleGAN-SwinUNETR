@@ -38,15 +38,8 @@ spec:
           # --- Extract the compressed dataset ---
           echo "Extracting the dataset..."
           cd /data
-          if [ -f "brats128_processed_20250502_013316.tar.gz" ]; then
-            echo "Extracting brats128_processed_20250502_013316.tar.gz..."
-            sudo mkdir -p extracted_data
-            sudo tar -xzf brats128_processed_20250502_013316.tar.gz -C extracted_data
-            echo "Extraction complete."
-          else
-            echo "Error: brats128_processed_20250502_013316.tar.gz not found!"
-            exit 1
-          fi
+          sudo mkdir -p extracted_data
+          sudo tar -xzf brats128_processed_20250502_013316.tar.gz -C extracted_data
 
           # List extracted contents
           echo "Extracted data contents:"
@@ -61,7 +54,7 @@ spec:
             --num_workers=4 \
             --batch_size=16 \
             --epochs=300 \
-            --data_dir=/data/extracted_data
+            --data_path /data/extracted_data
           
           # Save results back to PVC
           echo "Saving results back to PVC..."
