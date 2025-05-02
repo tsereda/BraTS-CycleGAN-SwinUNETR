@@ -6,6 +6,14 @@ echo "Val images: $(ls processed/brats128_split/val/images/ | wc -l)" && \
 echo "Val masks: $(ls processed/brats128_split/val/masks/ | wc -l)" && \
 echo "CycleGAN images: $(ls processed/brats128_cyclegan/images/ | wc -l)"
 
+
+echo "Segmentation images: $(ls ~/processed/brats128_split/segmentation/images/ | wc -l)" && \
+echo "Segmentation masks: $(ls ~/processed/brats128_split/segmentation/masks/ | wc -l)" && \
+echo "Test images: $(ls ~/processed/brats128_split/test/images/ | wc -l)" && \
+echo "Test masks: $(ls ~/processed/brats128_split/test/masks/ | wc -l)" && \
+echo "CycleGAN training images: $(ls ~/processed/brats128_split/cyclegan/images/ | wc -l)" && \
+echo "Final CycleGAN images: $(ls ~/processed/brats128_cyclegan/images/ | wc -l)"
+
 # BraTS-CycleGAN-SwinUNETR
 
 A comprehensive framework for brain tumor segmentation in MRI images with modality synthesis using 3D CycleGAN and SwinUNETR segmentation models.

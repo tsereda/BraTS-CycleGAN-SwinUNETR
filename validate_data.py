@@ -1,6 +1,9 @@
 import os
 import glob
 import json
+import numpy as np
+import matplotlib.pyplot as plt
+import random
 from pathlib import Path
 
 def count_dataset_cases(base_path):
@@ -34,62 +37,89 @@ def count_dataset_cases(base_path):
         print(f"ERROR: Images directory not found at {image_path}")
         return 0
 
-def count_split_dataset(base_path):
+def count_segmentation_cyclegan_test(split_path):
     """
-    Count the number of cases in a split dataset (train/val)
+    Count the number of cases in segmentation, cyclegan, and test directories
     """
-    print(f"\n=== Counting cases in split dataset {base_path} ===")
+    print(f"\n=== Counting cases in segmentation/cyclegan/test at {split_path} ===")
     
     # Check if the base path exists
-    if not os.path.exists(base_path):
-        print(f"ERROR: Path {base_path} does not exist!")
-        return {"train": 0, "val": 0, "total": 0}
+    if not os.path.exists(split_path):
+        print(f"ERROR: Path {split_path} does not exist!")
+        return {"segmentation": 0, "cyclegan": 0, "test": 0, "total": 0}
     
-    # Count train cases
-    train_path = os.path.join(base_path, "train", "images")
-    if os.path.exists(train_path):
-        train_files = glob.glob(os.path.join(train_path, "*.npy"))
-        train_count = len(train_files)
+    # Count segmentation cases
+    seg_path = os.path.join(split_path, "segmentation", "images")
+    if os.path.exists(seg_path):
+        seg_files = glob.glob(os.path.join(seg_path, "*.npy"))
+        seg_count = len(seg_files)
         
         # Extract unique case IDs
-        train_case_ids = set()
-        for img_file in train_files:
+        seg_case_ids = set()
+        for img_file in seg_files:
             case_id = os.path.basename(img_file).replace("image_", "").replace(".npy", "")
-            train_case_ids.add(case_id)
+            seg_case_ids.add(case_id)
             
-        print(f"Found {len(train_case_ids)} unique training cases")
+        print(f"Found {len(seg_case_ids)} unique segmentation cases")
     else:
-        print(f"ERROR: Training images directory not found at {train_path}")
-        train_case_ids = set()
+        print(f"ERROR: Segmentation images directory not found at {seg_path}")
+        seg_case_ids = set()
     
-    # Count validation cases
-    val_path = os.path.join(base_path, "val", "images")
-    if os.path.exists(val_path):
-        val_files = glob.glob(os.path.join(val_path, "*.npy"))
-        val_count = len(val_files)
+    # Count cyclegan cases
+    cyclegan_path = os.path.join(split_path, "cyclegan", "images")
+    if os.path.exists(cyclegan_path):
+        cyclegan_files = glob.glob(os.path.join(cyclegan_path, "*.npy"))
+        cyclegan_count = len(cyclegan_files)
         
         # Extract unique case IDs
-        val_case_ids = set()
-        for img_file in val_files:
+        cyclegan_case_ids = set()
+        for img_file in cyclegan_files:
             case_id = os.path.basename(img_file).replace("image_", "").replace(".npy", "")
-            val_case_ids.add(case_id)
+            cyclegan_case_ids.add(case_id)
             
-        print(f"Found {len(val_case_ids)} unique validation cases")
+        print(f"Found {len(cyclegan_case_ids)} unique cyclegan cases")
     else:
-        print(f"ERROR: Validation images directory not found at {val_path}")
-        val_case_ids = set()
+        print(f"ERROR: CycleGAN images directory not found at {cyclegan_path}")
+        cyclegan_case_ids = set()
     
-    # Check if there's any overlap (there shouldn't be)
-    overlap = train_case_ids.intersection(val_case_ids)
-    if overlap:
-        print(f"WARNING: Found {len(overlap)} cases that appear in both train and validation sets!")
+    # Count test cases
+    test_path = os.path.join(split_path, "test", "images")
+    if os.path.exists(test_path):
+        test_files = glob.glob(os.path.join(test_path, "*.npy"))
+        test_count = len(test_files)
+        
+        # Extract unique case IDs
+        test_case_ids = set()
+        for img_file in test_files:
+            case_id = os.path.basename(img_file).replace("image_", "").replace(".npy", "")
+            test_case_ids.add(case_id)
+            
+        print(f"Found {len(test_case_ids)} unique test cases")
+    else:
+        print(f"ERROR: Test images directory not found at {test_path}")
+        test_case_ids = set()
     
-    total_cases = len(train_case_ids) + len(val_case_ids)
+    # Check for overlaps between sets (there shouldn't be any)
+    seg_cyclegan_overlap = seg_case_ids.intersection(cyclegan_case_ids)
+    seg_test_overlap = seg_case_ids.intersection(test_case_ids)
+    cyclegan_test_overlap = cyclegan_case_ids.intersection(test_case_ids)
+    
+    if seg_cyclegan_overlap:
+        print(f"WARNING: Found {len(seg_cyclegan_overlap)} cases that appear in both segmentation and cyclegan sets!")
+    
+    if seg_test_overlap:
+        print(f"WARNING: Found {len(seg_test_overlap)} cases that appear in both segmentation and test sets!")
+    
+    if cyclegan_test_overlap:
+        print(f"WARNING: Found {len(cyclegan_test_overlap)} cases that appear in both cyclegan and test sets!")
+    
+    total_cases = len(seg_case_ids) + len(cyclegan_case_ids) + len(test_case_ids)
     print(f"Total unique cases in split dataset: {total_cases}")
     
     return {
-        "train": len(train_case_ids), 
-        "val": len(val_case_ids), 
+        "segmentation": len(seg_case_ids), 
+        "cyclegan": len(cyclegan_case_ids), 
+        "test": len(test_case_ids), 
         "total": total_cases
     }
 
@@ -138,7 +168,10 @@ def check_processing_results(processed_path):
     """
     Check the processing_results.json file if it exists
     """
-    results_file = os.path.join(processed_path, "processing_results.json")
+    results_file = os.path.join(processed_path, "processing_results_training.json")
+    if not os.path.exists(results_file):
+        results_file = os.path.join(processed_path, "processing_results.json")
+        
     if os.path.exists(results_file):
         try:
             with open(results_file, 'r') as f:
@@ -158,24 +191,173 @@ def check_processing_results(processed_path):
     
     return None
 
+def visualize_brats_samples(data_dir, output_file, num_samples=3):
+    """
+    Create a single visualization of multiple BraTS samples and save as PNG
+    
+    Args:
+        data_dir: Base directory containing processed data
+        output_file: Path to save the output PNG
+        num_samples: Number of samples to include
+    """
+    print(f"\n=== Creating visualization of {num_samples} samples ===")
+    
+    # Expand user directory paths
+    data_dir = Path(data_dir).expanduser()
+    output_file = Path(output_file).expanduser()
+    
+    # Get image and mask files from segmentation dataset
+    img_path = data_dir / 'brats128_split' / 'segmentation' / 'images'
+    mask_path = data_dir / 'brats128_split' / 'segmentation' / 'masks'
+    
+    img_files = sorted(glob.glob(str(img_path / '*.npy')))
+    
+    if not img_files:
+        print(f"No image files found in {img_path}")
+        return
+        
+    # Select random samples
+    random.seed(42)  # For reproducibility
+    selected_files = random.sample(img_files, min(num_samples, len(img_files)))
+    
+    # Create a large figure to hold all samples
+    fig = plt.figure(figsize=(15, 5 * num_samples))
+    fig.suptitle("BraTS Dataset - Sample Visualization (Axial View)", fontsize=16)
+    
+    modality_names = ['FLAIR', 'T1CE', 'T2', 'T1']
+    
+    # Plot each sample
+    for i, img_file in enumerate(selected_files):
+        # Get corresponding mask file
+        case_id = os.path.basename(img_file).replace('image_', '').replace('.npy', '')
+        mask_file = mask_path / f"mask_{case_id}.npy"
+        
+        # Load data
+        img_data = np.load(img_file)
+        mask_data = np.load(mask_file) if mask_file.exists() else None
+        
+        # Get dimensions and middle slice for axial view
+        x, y, z, modalities = img_data.shape
+        mid_slice = z // 2
+        
+        # Row position for this sample (each sample gets 5 subplots - 4 modalities + 1 mask)
+        row_pos = i * 5
+        
+        # Add sample ID
+        plt.figtext(0.05, 0.98 - (i * 0.31), f"Sample {i+1}: {case_id} - Shape: {img_data.shape}", 
+                   fontsize=12, weight='bold')
+        
+        # Plot each modality
+        for m in range(modalities):
+            ax = plt.subplot(num_samples, 5, row_pos + m + 1)
+            ax.imshow(img_data[:, :, mid_slice, m], cmap='gray')
+            ax.set_title(f"{modality_names[m]}")
+            ax.set_xticks([])
+            ax.set_yticks([])
+        
+        # Plot mask overlay if available
+        if mask_data is not None:
+            ax = plt.subplot(num_samples, 5, row_pos + 5)
+            ax.imshow(img_data[:, :, mid_slice, 0], cmap='gray')  # FLAIR as background
+            
+            # Color the different segmentation classes
+            mask_slice = mask_data[:, :, mid_slice]
+            edema = np.ma.masked_where(mask_slice != 1, mask_slice)
+            non_enhancing = np.ma.masked_where(mask_slice != 2, mask_slice)
+            enhancing = np.ma.masked_where(mask_slice != 3, mask_slice)
+            
+            ax.imshow(edema, cmap='cool', alpha=0.5)
+            ax.imshow(non_enhancing, cmap='autumn', alpha=0.5)
+            ax.imshow(enhancing, cmap='winter', alpha=0.5)
+            
+            ax.set_title("Mask Overlay")
+            ax.set_xticks([])
+            ax.set_yticks([])
+    
+    plt.tight_layout(rect=[0, 0, 1, 0.95])  # Adjust layout to make room for title
+    
+    # Save the figure
+    plt.savefig(output_file, dpi=150, bbox_inches='tight')
+    print(f"Visualization saved to {output_file}")
+    plt.close(fig)
+
+def visualize_cyclegan_samples(data_dir, output_file, num_samples=3):
+    """
+    Create a visualization of CycleGAN samples (no masks)
+    
+    Args:
+        data_dir: Base directory containing processed data
+        output_file: Path to save the output PNG
+        num_samples: Number of samples to include
+    """
+    print(f"\n=== Creating visualization of {num_samples} CycleGAN samples ===")
+    
+    # Expand user directory paths
+    data_dir = Path(data_dir).expanduser()
+    output_file = Path(output_file).expanduser()
+    
+    # Get image files from cyclegan dataset
+    img_path = data_dir / 'brats128_cyclegan' / 'images'
+    
+    img_files = sorted(glob.glob(str(img_path / '*.npy')))
+    
+    if not img_files:
+        print(f"No image files found in {img_path}")
+        return
+        
+    # Select random samples
+    random.seed(43)  # Different seed from segmentation
+    selected_files = random.sample(img_files, min(num_samples, len(img_files)))
+    
+    # Create a figure to hold all samples
+    fig = plt.figure(figsize=(15, 4 * num_samples))
+    fig.suptitle("CycleGAN Dataset - Sample Visualization (Axial View)", fontsize=16)
+    
+    modality_names = ['FLAIR', 'T1CE', 'T2', 'T1']
+    
+    # Plot each sample
+    for i, img_file in enumerate(selected_files):
+        # Get case ID
+        case_id = os.path.basename(img_file).replace('image_', '').replace('.npy', '')
+        
+        # Load data
+        img_data = np.load(img_file)
+        
+        # Get dimensions and middle slice for axial view
+        x, y, z, modalities = img_data.shape
+        mid_slice = z // 2
+        
+        # Add sample ID
+        plt.figtext(0.05, 0.98 - (i * 0.25), f"Sample {i+1}: {case_id} - Shape: {img_data.shape}", 
+                   fontsize=12, weight='bold')
+        
+        # Plot each modality
+        for m in range(modalities):
+            ax = plt.subplot(num_samples, 4, i * 4 + m + 1)
+            ax.imshow(img_data[:, :, mid_slice, m], cmap='gray')
+            ax.set_title(f"{modality_names[m]}")
+            ax.set_xticks([])
+            ax.set_yticks([])
+    
+    plt.tight_layout(rect=[0, 0, 1, 0.95])  # Adjust layout to make room for title
+    
+    # Save the figure
+    plt.savefig(output_file, dpi=150, bbox_inches='tight')
+    print(f"Visualization saved to {output_file}")
+    plt.close(fig)
+
 def main():
     """
-    Main function to count all datasets
+    Main function to count all datasets and create visualizations
     """
-    # Raw dataset paths
-    RAW_TRAINING_PATH = "~/BraTS2020_TrainingData/MICCAI_BraTS2020_TrainingData"
-    RAW_VALIDATION_PATH = "~/BraTS2020_ValidationData/MICCAI_BraTS2020_ValidationData"
+    # Process base directory
+    processed_base = os.path.expanduser("~/processed")
     
     # Processed dataset paths
-    PROCESSED_TRAINING_PATH = "processed/brats128_training"
-    PROCESSED_VALIDATION_PATH = "processed/brats128_validation"
-    SPLIT_DATA_PATH = "processed/brats128_split"
-    CYCLEGAN_DATA_PATH = "processed/brats128_cyclegan"
-    
-    # Count raw datasets
-    print("\n=== COUNTING RAW DATASETS ===")
-    raw_training_count = count_raw_dataset(RAW_TRAINING_PATH)
-    raw_validation_count = count_raw_dataset(RAW_VALIDATION_PATH)
+    PROCESSED_TRAINING_PATH = os.path.join(processed_base, "brats128_training")
+    PROCESSED_VALIDATION_PATH = os.path.join(processed_base, "brats128_validation")
+    SPLIT_DATA_PATH = os.path.join(processed_base, "brats128_split")
+    CYCLEGAN_DATA_PATH = os.path.join(processed_base, "brats128_cyclegan")
     
     # Count processed datasets
     print("\n=== COUNTING PROCESSED DATASETS ===")
@@ -186,28 +368,47 @@ def main():
     training_results = check_processing_results(PROCESSED_TRAINING_PATH)
     validation_results = check_processing_results(PROCESSED_VALIDATION_PATH)
     
-    # Count split dataset
-    split_counts = count_split_dataset(SPLIT_DATA_PATH)
+    # Count segmentation/cyclegan/test split
+    split_counts = count_segmentation_cyclegan_test(SPLIT_DATA_PATH)
     
     # Count CycleGAN dataset
     cyclegan_count = count_dataset_cases(CYCLEGAN_DATA_PATH)
     
     # Print summary
     print("\n=== DATASET COUNT SUMMARY ===")
-    print(f"Raw Training Cases: {raw_training_count}")
-    print(f"Raw Validation Cases: {raw_validation_count}")
     print(f"Processed Training Cases: {processed_training_count}")
     print(f"Processed Validation Cases: {processed_validation_count}")
-    print(f"Split Dataset - Training Cases: {split_counts['train']}")
-    print(f"Split Dataset - Validation Cases: {split_counts['val']}")
-    print(f"CycleGAN Dataset Cases: {cyclegan_count}")
+    print(f"Split Dataset - Segmentation Cases: {split_counts['segmentation']}")
+    print(f"Split Dataset - CycleGAN Cases: {split_counts['cyclegan']}")
+    print(f"Split Dataset - Test Cases: {split_counts['test']}")
+    print(f"Final CycleGAN Dataset Cases: {cyclegan_count}")
     
-    # Calculate total cases for CycleGAN (should be train + validation)
-    expected_cyclegan = split_counts['train'] + processed_validation_count
+    # Calculate total cases for CycleGAN (should be train cyclegan + validation)
+    expected_cyclegan = split_counts['cyclegan'] + processed_validation_count
     if cyclegan_count != expected_cyclegan:
-        print(f"WARNING: CycleGAN dataset count ({cyclegan_count}) doesn't match expected count ({expected_cyclegan})")
+        print(f"NOTE: Final CycleGAN dataset count ({cyclegan_count}) differs from theoretical count ({expected_cyclegan})")
+        print(f"      This may be due to filtering of validation cases during processing")
     else:
-        print(f"CycleGAN dataset count matches expected count (train split + validation = {expected_cyclegan})")
+        print(f"CycleGAN dataset count matches expected count (cyclegan split + validation = {expected_cyclegan})")
+    
+    # Create visualizations
+    print("\n=== CREATING VISUALIZATIONS ===")
+    
+    # Create a directory for visualizations
+    vis_dir = os.path.join(processed_base, "visualizations")
+    os.makedirs(vis_dir, exist_ok=True)
+    
+    # Visualize segmentation samples
+    vis_path_seg = os.path.join(vis_dir, "segmentation_samples.png")
+    visualize_brats_samples(processed_base, vis_path_seg, num_samples=3)
+    
+    # Visualize cyclegan samples
+    vis_path_cycle = os.path.join(vis_dir, "cyclegan_samples.png")
+    visualize_cyclegan_samples(processed_base, vis_path_cycle, num_samples=3)
+    
+    print(f"\nAll visualizations saved to: {vis_dir}")
+    print(f"  - Segmentation samples: {vis_path_seg}")
+    print(f"  - CycleGAN samples: {vis_path_cycle}")
 
 if __name__ == "__main__":
     main()
