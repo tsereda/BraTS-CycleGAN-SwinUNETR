@@ -15,3 +15,8 @@ segmentation_samples.png
 seg_samp.png
 img.png
 samp.png
+132epochs_t2_flair.pth
+logs.json
+.gitignore
+133epochs_t2_flair.pth
+processed.tar.gz
