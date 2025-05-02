@@ -4,6 +4,7 @@ import json
 import numpy as np
 import matplotlib.pyplot as plt
 import random
+import argparse
 from pathlib import Path
 
 def count_dataset_cases(base_path):
@@ -350,8 +351,19 @@ def main():
     """
     Main function to count all datasets and create visualizations
     """
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Validate BraTS processed datasets')
+    parser.add_argument('--data_dir', type=str, default=None, 
+                        help='Base directory for processed data (default: /opt/repo/BraTS-CycleGAN-SwinUNETR/processed/)')
+    args = parser.parse_args()
+    
     # Process base directory
-    processed_base = os.path.expanduser("~/processed")
+    if args.data_dir:
+        # Use provided data directory
+        processed_base = os.path.abspath(args.data_dir)
+    else:
+        # Default to the project repository path 
+        processed_base = "/opt/repo/BraTS-CycleGAN-SwinUNETR/processed/"
     
     # Processed dataset paths
     PROCESSED_TRAINING_PATH = os.path.join(processed_base, "brats128_training")
