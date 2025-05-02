@@ -28,6 +28,7 @@ spec:
       # Preprocessing
       echo "Copying the dataset from pvc..."
       cp /data/brats-data-many/brats20-dataset-training-validation.zip .
+      ls -lh
       unzip brats20-dataset-training-validation.zip
       mkdir -p processed
       pip install nibabel
