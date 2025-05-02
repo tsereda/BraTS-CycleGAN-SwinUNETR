@@ -13,3 +13,4 @@ cyclegan_samples.png
 .gitignore
 segmentation_samples.png
 seg_samp.png
+img.png

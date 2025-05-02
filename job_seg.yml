@@ -1,0 +1,136 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: brats-seg # Customize this name (e.g., brats-seg-training-run-1)
+
+spec:
+  template:
+    spec:
+      securityContext: # Security context for the main container
+        runAsUser: 1000
+        runAsGroup: 100
+        fsGroup: 100
+      containers:
+      - name: brats-processing
+        image: gitlab-registry.nrp-nautilus.io/prp/jupyter-stack/prp
+        env:
+        - name: REPO_PATH # Path to the repository in the container
+          value: /app/BraTS-CycleGAN-SwinUNETR
+        command: # Command to execute in the container
+        - "bash"
+        - "-c"
+        args:
+        - |
+          # --- User and Environment Setup ---
+          echo "Running as user: $(whoami), UID: $(id -u), GID: $(id -g)"
+
+          # --- Git Repository Update ---
+          echo "Updating Git repository..."
+          cd ${REPO_PATH} # Navigate to the repository directory
+          git pull origin main || { echo "Failed to update git repository"; exit 1; } # Pull changes from 'origin main'
+          echo "Git repository updated."
+
+          # --- Setup Python Environment with pip ---
+          echo "Setting up Python environment with pip..."
+          python -m pip install --upgrade pip
+          python -m pip install torch torchvision torchaudio monai pytorch-ignite nibabel matplotlib scikit-learn scikit-image tqdm tensorboard
+
+          # --- Extract the compressed dataset ---
+          echo "Extracting the dataset..."
+          cd /data
+          if [ -f "brats128_processed_20250502_013316.tar.gz" ]; then
+            echo "Extracting brats128_processed_20250502_013316.tar.gz..."
+            sudo mkdir -p extracted_data
+            tar -xzf brats128_processed_20250502_013316.tar.gz -C extracted_data
+            echo "Extraction complete."
+          else
+            echo "Error: brats128_processed_20250502_013316.tar.gz not found!"
+            exit 1
+          fi
+
+          # List extracted contents
+          echo "Extracted data contents:"
+          ls -la extracted_data
+
+          # Check shared memory size
+          df -h /dev/shm
+          
+          # Run the training script using the extracted data
+          echo "Running training script..."
+          python ${REPO_PATH}/segmentation/train.py \
+            --num_workers=4 \
+            --batch_size=16 \
+            --epochs=300 \
+            --data_dir=/data/extracted_data
+          
+          # Save results back to PVC
+          echo "Saving results back to PVC..."
+          TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+          RESULTS_DIR="/data/results_${TIMESTAMP}"
+          mkdir -p ${RESULTS_DIR}
+          
+          # Copy model weights, logs, and any other output
+          cp -r ${REPO_PATH}/segmentation/runs ${RESULTS_DIR}/runs
+          cp -r ${REPO_PATH}/segmentation/models ${RESULTS_DIR}/models || echo "No saved models found."
+          
+          # Create a summary file
+          echo "Training completed at $(date)" > ${RESULTS_DIR}/summary.txt
+          echo "Training parameters: workers=4, batch_size=16, epochs=300" >> ${RESULTS_DIR}/summary.txt
+          
+          # Compress results for easier download if needed
+          tar -czf ${RESULTS_DIR}.tar.gz ${RESULTS_DIR}
+          echo "Results saved to ${RESULTS_DIR} and compressed to ${RESULTS_DIR}.tar.gz"
+
+        volumeMounts: # Mount volumes into the container
+        - name: git-repo
+          mountPath: /app # Mount for the git repository code
+        - name: brats-data-volume
+          mountPath: /data # Mount for the brats data
+        - name: dshm # Add shared memory volume mount
+          mountPath: /dev/shm # Standard shared memory path
+
+        resources: # Resource requests and limits for the container
+          limits:
+            memory: 30Gi
+            cpu: "24"
+            nvidia.com/a100: "1"
+          requests:
+            memory: 25Gi
+            cpu: "20"
+            nvidia.com/a100: "1"
+
+      initContainers: # Init containers run before the main container
+      - name: init-git-repo # Init container to clone the git repository
+        image: alpine/git
+        args:
+        - clone
+        - --single-branch
+        - -b
+        - fix-training-permissions
+        - https://gitlab.nrp-nautilus.io/timothy.sereda/BraTS-CycleGAN-SwinUNETR # Update this URL to your repository
+        - /app/BraTS-CycleGAN-SwinUNETR # Updated clone target path to match new REPO_PATH
+        volumeMounts:
+        - name: git-repo
+          mountPath: /app # Mount for the git repository
+        resources: # Resources for the init container
+          limits:
+            memory: 307Mi
+            cpu: 240m
+          requests:
+            memory: 256Mi
+            cpu: 200m
+
+      volumes: # Define volumes used by the job
+      - name: git-repo # Volume for storing the git repository - using emptyDir for job-specific repo
+        emptyDir: {}
+      - name: brats-data-volume # Updated volume for brats data - PersistentVolumeClaim
+        persistentVolumeClaim:
+          claimName: brats-data-many
+      - name: dshm # Add shared memory volume definition
+        emptyDir:
+          medium: Memory # Use memory as storage medium
+          sizeLimit: 8Gi # Allocate 8GB of shared memory
+
+      restartPolicy: Never # Job should not restart containers on failure
+
+  backoffLimit: 1 # Number of retries before considering the job failed

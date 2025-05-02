@@ -112,9 +112,9 @@ def process_single_case(case_data, output_path, min_label_ratio=0.007, has_mask=
         
         # Calculate crop boundaries with asymmetric cropping (no cropping on right side)
         x_start = max(0, crop_margin)
-        x_end = min(orig_dims[0], 240)  # No cropping on right side
+        x_end = min(orig_dims[0] - crop_margin, 240 - crop_margin)  # Now cropping x end (bottom)
         y_start = max(0, crop_margin)
-        y_end = min(orig_dims[1] - crop_margin, 240 - crop_margin)
+        y_end = min(orig_dims[1], 240)  # No cropping on y end (right side)
         z_start = max(0, crop_margin // 2)  # Less margin for z-axis
         z_end = min(orig_dims[2] - (crop_margin // 2), 155 - (crop_margin // 2))
         
