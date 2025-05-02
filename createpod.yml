@@ -32,9 +32,8 @@ spec:
       mkdir processed
       pip install nibabel
       python3 data_preprocessing.py --input_train BraTS2020_TrainingData/MICCAI_BraTS2020_TrainingData/ --input_val BraTS2020_ValidationData/MICCAI_BraTS2020_ValidationData/
-
-      echo "Pod is running. Connect with: kubectl exec -it <pod-name> -- bash"
-      echo "Sleeping indefinitely. Use Ctrl+C to terminate."
+      sudo tar -czvf /data/brats-data-many/brats128_processed_$(date +%Y%m%d_%H%M%S).tar.gz -C ~/processed .
+      echo "Sleeping indefinitely."
       sleep infinity
     volumeMounts:
     - name: git-repo

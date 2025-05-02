@@ -9,3 +9,6 @@ checkpoint_t2_flair_epoch056_20250501_032010.pth
 processed_data.tar.gz
 t2_flair_AtoB_samples_epoch057_val.png
 checkpoint90.pth
+cyclegan_samples.png
+.gitignore
+segmentation_samples.png

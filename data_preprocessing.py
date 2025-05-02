@@ -112,12 +112,13 @@ def process_single_case(case_data, output_path, min_label_ratio=0.007, has_mask=
         
         # Calculate crop boundaries - less aggressive crop
         # These values are adjusted from the original 40:200, 40:200, 10:145
+        # Calculate crop boundaries with asymmetric cropping (less on right side)
         x_start = max(0, crop_margin)
-        x_end = min(orig_dims[0] - crop_margin, 240 - crop_margin)  # assuming 240x240 images
+        x_end = min(orig_dims[0] - (crop_margin // 2), 240 - (crop_margin // 2))  # Crop half as much on right
         y_start = max(0, crop_margin)
         y_end = min(orig_dims[1] - crop_margin, 240 - crop_margin)
         z_start = max(0, crop_margin // 2)  # Less margin for z-axis
-        z_end = min(orig_dims[2] - (crop_margin // 2), 155 - (crop_margin // 2))  # assuming 155 slices
+        z_end = min(orig_dims[2] - (crop_margin // 2), 155 - (crop_margin // 2))
         
         # Pre-crop to reduce memory footprint before normalization - less aggressive crop
         temp_image_flair = temp_image_flair[x_start:x_end, y_start:y_end, z_start:z_end]
@@ -616,8 +617,8 @@ if __name__ == "__main__":
                         help='Path to raw validation data (default: /data/BraTS2020_ValidationData/MICCAI_BraTS2020_ValidationData)')
     
     # Output paths
-    parser.add_argument('--output_base', type=str, default='~/processed',
-                        help='Base directory for all output folders (default: ~/processed)')
+    parser.add_argument('--output_base', type=str, default='processed',
+                        help='Base directory for all output folders (default: processed)')
     
     # Crop margin parameter
     parser.add_argument('--crop_margin', type=int, default=35,
