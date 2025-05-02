@@ -41,7 +41,7 @@ spec:
           if [ -f "brats128_processed_20250502_013316.tar.gz" ]; then
             echo "Extracting brats128_processed_20250502_013316.tar.gz..."
             sudo mkdir -p extracted_data
-            tar -xzf brats128_processed_20250502_013316.tar.gz -C extracted_data
+            sudo tar -xzf brats128_processed_20250502_013316.tar.gz -C extracted_data
             echo "Extraction complete."
           else
             echo "Error: brats128_processed_20250502_013316.tar.gz not found!"
