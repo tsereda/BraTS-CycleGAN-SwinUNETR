@@ -12,3 +12,4 @@ checkpoint90.pth
 cyclegan_samples.png
 .gitignore
 segmentation_samples.png
+seg_samp.png
