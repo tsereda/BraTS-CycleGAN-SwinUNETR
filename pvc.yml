@@ -3,8 +3,9 @@ kind: PersistentVolumeClaim
 metadata:
   name: brats-data
 spec:
+  storageClassName: rook-cephfs-central
   accessModes:
     - ReadWriteMany
   resources:
     requests:
-      storage: 500Gi  # Adjust as needed
+      storage: 500Gi
