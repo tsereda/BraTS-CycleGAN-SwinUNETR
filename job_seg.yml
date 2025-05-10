@@ -21,23 +21,21 @@ spec:
           args:
             - |
               echo "Running as user: $(whoami), UID: $(id -u), GID: $(id -g)"
-              
               # Check available disk space before starting
               echo "Available disk space on /data:"
               df -h /data
               echo "Available disk space on /app:"
               df -h /app
-              
               # Create output directories with correct permissions
               mkdir -p /app/output
               mkdir -p /app/results
-              
               # Clone the repository
               git clone https://gitlab.nrp-nautilus.io/timothy.sereda/BraTS-CycleGAN-SwinUNETR ${REPO_PATH}
               cd ${REPO_PATH}
               
-              # Setup Python environment
+              # Setup Python environment with specific PyTorch version
               python -m pip install --upgrade pip
+              python -m pip install torch torchvision torchaudio
               python -m pip install nibabel matplotlib tqdm tensorboard typing-extensions==4.5.0
               
               # Clean up any existing extracted data
@@ -53,26 +51,65 @@ spec:
               tar -xzf brats128_processed_20250502_040703.tar.gz -C /app/extracted_data
               ls -la /app/extracted_data
               
+              # Create correct folder structure if needed
+              mkdir -p /app/extracted_data/brats128_split/train/images
+              mkdir -p /app/extracted_data/brats128_split/train/labels
+              mkdir -p /app/extracted_data/brats128_split/val/images
+              mkdir -p /app/extracted_data/brats128_split/val/labels
+              
+              # Move files to the correct locations if they're not already there
+              if [ -d "/app/extracted_data/brats128_split" ]; then
+                # If directory structure is already correct, we don't need to do anything
+                echo "Directory structure appears correct"
+              elif [ -d "/app/extracted_data/train" ]; then
+                # If the extracted data has train/val at the top level, move them to the expected structure
+                mkdir -p /app/extracted_data/brats128_split
+                mv /app/extracted_data/train /app/extracted_data/brats128_split/
+                mv /app/extracted_data/val /app/extracted_data/brats128_split/
+                echo "Reorganized directories to match expected structure"
+              else
+                echo "Warning: Unexpected directory structure in extracted data"
+                ls -R /app/extracted_data
+              fi
+              
+              # Directly modify the train.py script instead of using a separate patch script
+              SCRIPT_PATH="${REPO_PATH}/segmentation/train.py"
+              
+              # Fix the GradScaler issue
+              sed -i 's/scaler = torch\.amp\.GradScaler() if use_mixed_precision else None/scaler = torch.amp.GradScaler() if use_mixed_precision and hasattr(torch.amp, "GradScaler") else None\nuse_mixed_precision = use_mixed_precision and hasattr(torch.amp, "GradScaler")/' $SCRIPT_PATH
+              
+              # Fix the data path handling - search for data_dir assignment and replace it
+              sed -i 's|data_dir = os\.path\.join.*|data_dir = data_path|' $SCRIPT_PATH
+              
+              # Print modified sections to verify changes
+              echo "Verifying script modifications:"
+              grep -A2 "data_dir = " $SCRIPT_PATH
+              grep -A2 "GradScaler" $SCRIPT_PATH
+              
+              echo "Running training with data path: /app/extracted_data/brats128_split"
+              
               # Run training script with data from /app
               python ${REPO_PATH}/segmentation/train.py \
                 --num_workers=4 \
                 --batch_size=16 \
                 --epochs=300 \
-                --data_path /app/extracted_data \
-                --output_dir /app/output
+                --data_path /app/extracted_data/brats128_split \
+                --output_dir /app/output \
+                --use_mixed_precision=False
               
               # Save results
               TIMESTAMP=$(date +%Y%m%d_%H%M%S)
               RESULTS_DIR="/app/results_${TIMESTAMP}"
               mkdir -p ${RESULTS_DIR}
-              cp -r ${REPO_PATH}/segmentation/runs ${RESULTS_DIR}/runs || echo "No runs directory"
-              cp -r ${REPO_PATH}/segmentation/models ${RESULTS_DIR}/models || echo "No models directory"
+              cp -r ${REPO_PATH}/segmentation/runs ${RESULTS_DIR}/runs 2>/dev/null || echo "No runs directory"
+              cp -r ${REPO_PATH}/segmentation/models ${RESULTS_DIR}/models 2>/dev/null || echo "No models directory"
+              cp -r /app/output/* ${RESULTS_DIR}/ 2>/dev/null || echo "No output files"
               echo "Training completed at $(date)" > ${RESULTS_DIR}/summary.txt
               echo "Training parameters: workers=4, batch_size=16, epochs=300" >> ${RESULTS_DIR}/summary.txt
               
               # Try to copy to data volume if possible - only copy results, not extracted data
-              cp -r ${RESULTS_DIR} /data/ || echo "Could not copy results to /data"
-              tar -czf /data/${TIMESTAMP}_results.tar.gz ${RESULTS_DIR} || echo "Could not create tar archive"
+              cp -r ${RESULTS_DIR} /data/ 2>/dev/null || echo "Could not copy results to /data"
+              tar -czf /data/${TIMESTAMP}_results.tar.gz -C /app $(basename ${RESULTS_DIR}) 2>/dev/null || echo "Could not create tar archive"
           volumeMounts:
             - name: git-repo
               mountPath: /app
