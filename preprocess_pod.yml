@@ -47,16 +47,16 @@ spec:
           memory: 24Gi
           cpu: "12"
           nvidia.com/gpu: "1"
-          ephemeral-storage: "180Gi"
+          ephemeral-storage: "240Gi"
         requests:
           memory: 20Gi
           cpu: "10"
           nvidia.com/gpu: "1"
-          ephemeral-storage: "150Gi"
+          ephemeral-storage: "200Gi"
   volumes:
     - name: local-processing
       emptyDir:
-        sizeLimit: 150Gi
+        sizeLimit: 200Gi
     - name: brats-data-volume
       persistentVolumeClaim:
         claimName: brats-data
