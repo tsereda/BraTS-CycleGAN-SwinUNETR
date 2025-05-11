@@ -114,7 +114,7 @@ def process_single_case(case_data, output_path, min_label_ratio=0.007, has_mask=
         x_start = max(0, crop_margin)
         x_end = min(orig_dims[0] - crop_margin, 240 - crop_margin)  # Cropping x end (bottom)
         y_start = max(0, crop_margin)
-        y_end = min(orig_dims[1] - crop_margin // 3, 240 - crop_margin // 3 )  # Added cropping on right side
+        y_end = min(orig_dims[1] - crop_margin // 3, 240 - crop_margin // 3)  # Added cropping on right side
         z_start = max(0, crop_margin // 2)  # Less margin for z-axis
         z_end = min(orig_dims[2] - (crop_margin // 2), 155 - (crop_margin // 2))
         
@@ -380,25 +380,25 @@ def split_dataset_three_way(input_folder: str, output_folder: str, seg_ratio=0.4
     output_path = Path(output_folder)
     output_path.mkdir(parents=True, exist_ok=True)
     
-    # Create directories for each split
-    (output_path / 'segmentation' / 'images').mkdir(parents=True, exist_ok=True)
-    (output_path / 'segmentation' / 'masks').mkdir(parents=True, exist_ok=True)
+    # Create directories for each split with the new structure
+    (output_path / 'segmentation' / 'train' / 'images').mkdir(parents=True, exist_ok=True)
+    (output_path / 'segmentation' / 'train' / 'masks').mkdir(parents=True, exist_ok=True)
+    (output_path / 'segmentation' / 'test' / 'images').mkdir(parents=True, exist_ok=True)
+    (output_path / 'segmentation' / 'test' / 'masks').mkdir(parents=True, exist_ok=True)
     (output_path / 'cyclegan' / 'images').mkdir(parents=True, exist_ok=True)
-    (output_path / 'test' / 'images').mkdir(parents=True, exist_ok=True)
-    (output_path / 'test' / 'masks').mkdir(parents=True, exist_ok=True)
     
     # Copy files to respective directories
     input_path = Path(input_folder)
     
     # Copy segmentation files
-    print(f"Copying files for segmentation dataset...")
+    print(f"Copying files for segmentation training dataset...")
     for case_id in seg_cases:
         # Copy image and mask for segmentation
         src_img = input_path / 'images' / f"image_{case_id}.npy"
-        dst_img = output_path / 'segmentation' / 'images' / f"image_{case_id}.npy"
+        dst_img = output_path / 'segmentation' / 'train' / 'images' / f"image_{case_id}.npy"
         
         src_mask = input_path / 'masks' / f"mask_{case_id}.npy"
-        dst_mask = output_path / 'segmentation' / 'masks' / f"mask_{case_id}.npy"
+        dst_mask = output_path / 'segmentation' / 'train' / 'masks' / f"mask_{case_id}.npy"
         
         if os.path.exists(src_img) and os.path.exists(src_mask):
             shutil.copy2(src_img, dst_img)
@@ -415,36 +415,36 @@ def split_dataset_three_way(input_folder: str, output_folder: str, seg_ratio=0.4
             shutil.copy2(src_img, dst_img)
     
     # Copy test files
-    print(f"Copying files for test dataset...")
+    print(f"Copying files for segmentation test dataset...")
     for case_id in test_cases:
         # Copy image and mask for test set
         src_img = input_path / 'images' / f"image_{case_id}.npy"
-        dst_img = output_path / 'test' / 'images' / f"image_{case_id}.npy"
+        dst_img = output_path / 'segmentation' / 'test' / 'images' / f"image_{case_id}.npy"
         
         src_mask = input_path / 'masks' / f"mask_{case_id}.npy"
-        dst_mask = output_path / 'test' / 'masks' / f"mask_{case_id}.npy"
+        dst_mask = output_path / 'segmentation' / 'test' / 'masks' / f"mask_{case_id}.npy"
         
         if os.path.exists(src_img) and os.path.exists(src_mask):
             shutil.copy2(src_img, dst_img)
             shutil.copy2(src_mask, dst_mask)
     
     # Count files in each split
-    seg_images = len(glob.glob(f"{output_folder}/segmentation/images/*.npy"))
-    seg_masks = len(glob.glob(f"{output_folder}/segmentation/masks/*.npy"))
+    seg_train_images = len(glob.glob(f"{output_folder}/segmentation/train/images/*.npy"))
+    seg_train_masks = len(glob.glob(f"{output_folder}/segmentation/train/masks/*.npy"))
+    seg_test_images = len(glob.glob(f"{output_folder}/segmentation/test/images/*.npy"))
+    seg_test_masks = len(glob.glob(f"{output_folder}/segmentation/test/masks/*.npy"))
     cyclegan_images = len(glob.glob(f"{output_folder}/cyclegan/images/*.npy"))
-    test_images = len(glob.glob(f"{output_folder}/test/images/*.npy"))
-    test_masks = len(glob.glob(f"{output_folder}/test/masks/*.npy"))
     
     print(f"Dataset split complete:")
-    print(f"  Segmentation: {seg_images} images, {seg_masks} masks")
+    print(f"  Segmentation Train: {seg_train_images} images, {seg_train_masks} masks")
+    print(f"  Segmentation Test: {seg_test_images} images, {seg_test_masks} masks")
     print(f"  CycleGAN: {cyclegan_images} images")
-    print(f"  Test: {test_images} images, {test_masks} masks")
     
     # Save case IDs for each split for reference
     split_info = {
-        'segmentation': seg_cases,
-        'cyclegan': cyclegan_cases,
-        'test': test_cases
+        'segmentation_train': seg_cases,
+        'segmentation_test': test_cases,
+        'cyclegan': cyclegan_cases
     }
     
     with open(output_path / 'split_info.json', 'w') as f:
@@ -497,10 +497,9 @@ def merge_cyclegan_datasets(training_cyclegan_path: str, validation_data_path: s
 def create_complete_dataset(
     training_data_path: str,
     validation_data_path: str,
-    processed_training_path: str,
-    processed_validation_path: str,
-    split_data_path: str,
-    final_cyclegan_path: str,
+    raw_training_path: str,
+    raw_validation_path: str,
+    dataset_path: str,
     crop_margin: int = 35
 ):
     """
@@ -510,10 +509,9 @@ def create_complete_dataset(
     Args:
         training_data_path (str): Path to raw training data
         validation_data_path (str): Path to raw validation data
-        processed_training_path (str): Path to save preprocessed training data
-        processed_validation_path (str): Path to save preprocessed validation data
-        split_data_path (str): Path to save split training data (segmentation, cyclegan, test)
-        final_cyclegan_path (str): Path to save final combined cyclegan data
+        raw_training_path (str): Path to save preprocessed training data
+        raw_validation_path (str): Path to save preprocessed validation data
+        dataset_path (str): Path to save the final dataset directory
         crop_margin (int): Margin to use for cropping (smaller value = less aggressive crop)
     """
     print(f"=== STARTING COMPLETE DATASET PREPARATION ===")
@@ -527,7 +525,7 @@ def create_complete_dataset(
         print(f"Found {len(training_dirs)} training directories")
         training_processed = preprocess_brats2020(
             training_data_path, 
-            processed_training_path,
+            raw_training_path,
             dataset_type="training",
             has_mask=True,
             crop_margin=crop_margin
@@ -554,7 +552,7 @@ def create_complete_dataset(
         
         validation_processed = preprocess_brats2020(
             validation_data_path, 
-            processed_validation_path,
+            raw_validation_path,
             dataset_type="validation",
             has_mask=has_mask_validation,
             crop_margin=crop_margin
@@ -564,17 +562,17 @@ def create_complete_dataset(
         print(f"WARNING: No validation directories found. Skipping validation data preprocessing.")
     
     # Step 3: Split training data into three non-overlapping sets
-    print("\n=== STEP 3: SPLITTING TRAINING DATA INTO THREE NON-OVERLAPPING SETS ===")
+    print("\n=== STEP 3: CREATING FINAL DATASET STRUCTURE ===")
     # Check if there's processed training data to split
-    train_images = len(glob.glob(f"{processed_training_path}/images/*.npy"))
-    train_masks = len(glob.glob(f"{processed_training_path}/masks/*.npy"))
+    train_images = len(glob.glob(f"{raw_training_path}/images/*.npy"))
+    train_masks = len(glob.glob(f"{raw_training_path}/masks/*.npy"))
     
     if train_images > 0 and train_masks > 0:
         print(f"Found {train_images} training images and {train_masks} masks to split")
         # Use 40% for segmentation, 40% for cyclegan, 20% for test
         split_info = split_dataset_three_way(
-            processed_training_path, 
-            split_data_path,
+            raw_training_path, 
+            dataset_path,
             seg_ratio=0.4,
             cyclegan_ratio=0.4,
             test_ratio=0.2
@@ -585,24 +583,24 @@ def create_complete_dataset(
     # Step 4: Merge CycleGAN images from training with validation data
     print("\n=== STEP 4: MERGING CYCLEGAN DATASETS ===")
     # Check if there's training cyclegan and validation data
-    train_cyclegan_images = len(glob.glob(f"{split_data_path}/cyclegan/images/*.npy"))
-    val_images = len(glob.glob(f"{processed_validation_path}/images/*.npy"))
+    train_cyclegan_images = len(glob.glob(f"{dataset_path}/cyclegan/images/*.npy"))
+    val_images = len(glob.glob(f"{raw_validation_path}/images/*.npy"))
     
     if train_cyclegan_images > 0 or val_images > 0:
         print(f"Found {train_cyclegan_images} training cyclegan images and {val_images} validation images")
         merge_cyclegan_datasets(
-            f"{split_data_path}/cyclegan",
-            processed_validation_path,
-            final_cyclegan_path
+            f"{dataset_path}/cyclegan",
+            raw_validation_path,
+            f"{dataset_path}/cyclegan"
         )
     else:
         print(f"WARNING: No data found for CycleGAN dataset. Skipping CycleGAN dataset creation.")
     
     print(f"\n=== COMPLETE DATASET PREPARATION FINISHED ===")
 
-    print(f"1. Segmentation training data: {split_data_path}/segmentation")
-    print(f"2. CycleGAN training data: {final_cyclegan_path}")
-    print(f"3. Test data: {split_data_path}/test")
+    print(f"1. Segmentation training data: {dataset_path}/segmentation/train")
+    print(f"2. Segmentation test data: {dataset_path}/segmentation/test")
+    print(f"3. CycleGAN training data: {dataset_path}/cyclegan")
     
 if __name__ == "__main__":
     # Parse command line arguments
@@ -627,31 +625,32 @@ if __name__ == "__main__":
     # Create derived output paths based on the base output directory
     output_base = Path(args.output_base).expanduser()  # Expand ~ to home directory
     
-    # Define all required directories
-    PROCESSED_TRAINING_PATH = str(output_base / 'brats128_training')
-    PROCESSED_VALIDATION_PATH = str(output_base / 'brats128_validation')
-    SPLIT_DATA_PATH = str(output_base / 'brats128_split')
-    FINAL_CYCLEGAN_PATH = str(output_base / 'brats128_cyclegan')
+    # Define all required directories with new naming scheme
+    RAW_DIR = str(output_base / 'brats_raw')
+    RAW_TRAINING_PATH = str(output_base / 'brats_raw' / 'training')
+    RAW_VALIDATION_PATH = str(output_base / 'brats_raw' / 'validation')
+    DATASET_PATH = str(output_base / 'brats_dataset')
     
     # Check and create all required directories
     print("=== CHECKING AND CREATING DIRECTORIES ===")
     all_dirs = [
         str(output_base),
-        PROCESSED_TRAINING_PATH,
-        PROCESSED_VALIDATION_PATH,
-        SPLIT_DATA_PATH,
-        FINAL_CYCLEGAN_PATH,
-        # Add subdirectories too
-        str(Path(PROCESSED_TRAINING_PATH) / 'images'),
-        str(Path(PROCESSED_TRAINING_PATH) / 'masks'),
-        str(Path(PROCESSED_VALIDATION_PATH) / 'images'),
-        str(Path(PROCESSED_VALIDATION_PATH) / 'masks'),
-        str(Path(SPLIT_DATA_PATH) / 'train' / 'images'), #train
-        str(Path(SPLIT_DATA_PATH) / 'train' / 'masks'),
-        str(Path(SPLIT_DATA_PATH) / 'cyclegan' / 'images'),
-        str(Path(SPLIT_DATA_PATH) / 'val' / 'images'), #val
-        str(Path(SPLIT_DATA_PATH) / 'val' / 'masks'),
-        str(Path(FINAL_CYCLEGAN_PATH) / 'images')
+        RAW_DIR,
+        RAW_TRAINING_PATH,
+        RAW_VALIDATION_PATH,
+        DATASET_PATH,
+        # Preprocessed raw data directories
+        str(Path(RAW_TRAINING_PATH) / 'images'),
+        str(Path(RAW_TRAINING_PATH) / 'masks'),
+        str(Path(RAW_VALIDATION_PATH) / 'images'),
+        str(Path(RAW_VALIDATION_PATH) / 'masks'),
+        # Final dataset directories
+        str(Path(DATASET_PATH) / 'segmentation'),
+        str(Path(DATASET_PATH) / 'segmentation' / 'train' / 'images'),
+        str(Path(DATASET_PATH) / 'segmentation' / 'train' / 'masks'),
+        str(Path(DATASET_PATH) / 'segmentation' / 'test' / 'images'),
+        str(Path(DATASET_PATH) / 'segmentation' / 'test' / 'masks'),
+        str(Path(DATASET_PATH) / 'cyclegan' / 'images')
     ]
     
     dir_status = check_and_create_directories(all_dirs)
@@ -689,10 +688,9 @@ if __name__ == "__main__":
     create_complete_dataset(
         training_data_path=args.input_train,
         validation_data_path=args.input_val,
-        processed_training_path=PROCESSED_TRAINING_PATH,
-        processed_validation_path=PROCESSED_VALIDATION_PATH,
-        split_data_path=SPLIT_DATA_PATH,
-        final_cyclegan_path=FINAL_CYCLEGAN_PATH,
+        raw_training_path=RAW_TRAINING_PATH,
+        raw_validation_path=RAW_VALIDATION_PATH,
+        dataset_path=DATASET_PATH,
         crop_margin=args.crop_margin
     )
     

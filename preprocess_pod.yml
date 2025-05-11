@@ -13,65 +13,69 @@ spec:
             values:
             - us-central
   containers:
-    - name: brats-processing
-      image: gitlab-registry.nrp-nautilus.io/prp/jupyter-stack/prp
-      env:
-        - name: REPO_PATH
-          value: /app/BraTS-CycleGAN-SwinUNETR
-      command:
-        - "bash"
-        - "-c"
-      args:
-        - |
-          echo "Cloning Git repository..."
-          git clone --single-branch -b main https://github.com/tsereda/BraTS-CycleGAN-SwinUNETR ${REPO_PATH}
-          cd ${REPO_PATH}
-          echo "Copying the dataset from pvc..."
-          cp /data/brats20-dataset-training-validation.zip .
-          ls -lh
-          unzip brats20-dataset-training-validation.zip
-          mkdir -p processed
-          pip install nibabel
-          python3 data_preprocessing.py --input_train BraTS2020_TrainingData/MICCAI_BraTS2020_TrainingData/ --input_val BraTS2020_ValidationData/MICCAI_BraTS2020_ValidationData/
-          python3 validate_data.py
-          echo "Removing intermediate processing directories to save space..."
-          rm -rf processed/brats128_training processed/brats128_validation processed/brats128_split/cyclegan
-
-          sudo apt-get update && sudo apt-get install -y pigz pv
-          echo "Compressing final processed data..."
-          cd ${REPO_PATH} && \
-          sudo tar -cf - -C processed . | pv | sudo pigz -p $(nproc) | sudo tee /data/brats128_processed_$(date +%Y%m%d_%H%M%S).tar.gz > /dev/null
-          ls -lh /data
-          echo "Sleeping indefinitely."
-          sleep infinity
-      volumeMounts:
-        - name: local-processing
-          mountPath: /app
-        - name: brats-data-volume
-          mountPath: /data
-        - name: dshm
-          mountPath: /dev/shm
-      resources:
-        limits:
-          memory: 24Gi
-          cpu: "12"
-          #max 16 
-          nvidia.com/gpu: "1"
-          ephemeral-storage: "240Gi"
-        requests:
-          memory: 20Gi
-          cpu: "10"
-          nvidia.com/gpu: "1"
-          ephemeral-storage: "200Gi"
-  volumes:
+  - name: brats-processing
+    image: gitlab-registry.nrp-nautilus.io/prp/jupyter-stack/prp
+    env:
+    - name: REPO_PATH
+      value: /app/BraTS-CycleGAN-SwinUNETR
+    command:
+    - "bash"
+    - "-c"
+    args:
+    - |
+      echo "Cloning Git repository..."
+      git clone --single-branch -b main https://github.com/tsereda/BraTS-CycleGAN-SwinUNETR ${REPO_PATH}
+      cd ${REPO_PATH}
+      echo "Copying the dataset from pvc..."
+      cp /data/brats20-dataset-training-validation.zip .
+      ls -lh
+      
+      # Install optimized extraction tools
+      sudo apt-get update && sudo apt-get install -y p7zip-full pigz pv
+      
+      echo "Extracting dataset with optimized multithreaded extraction..."
+      7z x brats20-dataset-training-validation.zip -y -mmt=$(nproc)
+      
+      mkdir -p processed
+      pip install nibabel
+      python3 data_preprocessing.py --input_train BraTS2020_TrainingData/MICCAI_BraTS2020_TrainingData/ --input_val BraTS2020_ValidationData/MICCAI_BraTS2020_ValidationData/
+      python3 validate_data.py
+      echo "Removing intermediate processing directories to save space..."
+      rm -rf processed/brats_raw
+      
+      echo "Compressing final processed data..."
+      cd ${REPO_PATH} && \
+      sudo tar -cf - -C processed . | pv | sudo pigz -p $(nproc) | sudo tee /data/brats_dataset_$(date +%m%d_%H%M).tar.gz > /dev/null
+      ls -lh /data
+      echo "Sleeping indefinitely."
+      sleep infinity
+    volumeMounts:
     - name: local-processing
-      emptyDir:
-        sizeLimit: 200Gi
+      mountPath: /app
     - name: brats-data-volume
-      persistentVolumeClaim:
-        claimName: brats-data
+      mountPath: /data
     - name: dshm
-      emptyDir:
-        medium: Memory
-        sizeLimit: 8Gi
+      mountPath: /dev/shm
+    resources:
+      limits:
+        memory: 24Gi
+        cpu: "12"
+        nvidia.com/gpu: "1"
+        ephemeral-storage: "240Gi"
+      requests:
+        memory: 20Gi
+        cpu: "10"
+        nvidia.com/gpu: "1"
+        ephemeral-storage: "200Gi"
+  volumes:
+  - name: local-processing
+    emptyDir:
+      sizeLimit: 200Gi
+  - name: brats-data-volume
+    persistentVolumeClaim:
+      claimName: brats-data
+  - name: dshm
+    emptyDir:
+      medium: Memory
+      sizeLimit: 8Gi
   restartPolicy: Never
