@@ -36,12 +36,11 @@ spec:
           python -m pip install nibabel matplotlib tqdm tensorboard typing-extensions==4.5.0
 
           echo "Running training with data path: extracted_data/brats128_split"
-          python ${REPO_PATH}/segmentation/train.py \
+          python segmentation/train.py \
             --num_workers=4 \
             --batch_size=4 \
             --epochs=300 \
-            --data_path extracted_data/brats128_split \
-            --output_path --output_path
+            --data_path=extracted_data/brats128_split
 
           TIMESTAMP=$(date +%Y%m%d_%H%M%S)
           RESULTS_DIR="results_${TIMESTAMP}"

@@ -22,7 +22,7 @@ from torch.optim.lr_scheduler import OneCycleLR
 def parse_args():
     """Parse command line arguments"""
     parser = argparse.ArgumentParser(description='BraTS Segmentation Training')
-    parser.add_argument('--data_path', type=str, default="processed_data/brats128_split/",
+    parser.add_argument('--data_path', type=str,
                         help='Path to dataset')
     parser.add_argument('--output_path', type=str, default="output/",
                         help='Path to save outputs')
