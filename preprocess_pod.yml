@@ -37,10 +37,10 @@ spec:
           echo "Removing intermediate processing directories to save space..."
           rm -rf processed/brats128_training processed/brats128_validation processed/brats128_split/cyclegan
 
-          apt-get update && apt-get install -y pigz pv
+          sudo apt-get update && sudo apt-get install -y pigz pv
           echo "Compressing final processed data..."
           cd ${REPO_PATH} && \
-          tar -cf - -C processed . | pv | pigz -p $(nproc) | tee /data/brats128_processed_$(date +%Y%m%d_%H%M%S).tar.gz > /dev/null
+          sudo tar -cf - -C processed . | pv | sudo pigz -p $(nproc) | sudo tee /data/brats128_processed_$(date +%Y%m%d_%H%M%S).tar.gz > /dev/null
           ls -lh /data
           echo "Sleeping indefinitely."
           sleep infinity
