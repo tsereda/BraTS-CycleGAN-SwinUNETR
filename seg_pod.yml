@@ -77,7 +77,7 @@ spec:
       emptyDir: {}
     - name: brats-data-volume
       persistentVolumeClaim:
-        claimName: brats-data-m
+        claimName: brats-data
     - name: dshm
       emptyDir:
         medium: Memory
