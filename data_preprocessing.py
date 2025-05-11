@@ -646,11 +646,11 @@ if __name__ == "__main__":
         str(Path(PROCESSED_TRAINING_PATH) / 'masks'),
         str(Path(PROCESSED_VALIDATION_PATH) / 'images'),
         str(Path(PROCESSED_VALIDATION_PATH) / 'masks'),
-        str(Path(SPLIT_DATA_PATH) / 'segmentation' / 'images'), #train
-        str(Path(SPLIT_DATA_PATH) / 'segmentation' / 'masks'),
+        str(Path(SPLIT_DATA_PATH) / 'train' / 'images'), #train
+        str(Path(SPLIT_DATA_PATH) / 'train' / 'masks'),
         str(Path(SPLIT_DATA_PATH) / 'cyclegan' / 'images'),
-        str(Path(SPLIT_DATA_PATH) / 'test' / 'images'), #val
-        str(Path(SPLIT_DATA_PATH) / 'test' / 'masks'),
+        str(Path(SPLIT_DATA_PATH) / 'val' / 'images'), #val
+        str(Path(SPLIT_DATA_PATH) / 'val' / 'masks'),
         str(Path(FINAL_CYCLEGAN_PATH) / 'images')
     ]
     
