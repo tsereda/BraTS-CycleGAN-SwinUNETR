@@ -22,7 +22,7 @@ spec:
           df -h /app
 
 
-          git clone https://gitlab.nrp-nautilus.io/timothy.sereda/BraTS-CycleGAN-SwinUNETR ${REPO_PATH}
+          git clone https://github.com/tsereda/BraTS-CycleGAN-SwinUNETR ${REPO_PATH}
           cd ${REPO_PATH}
           mkdir -p extracted_data
           mkdir -p output

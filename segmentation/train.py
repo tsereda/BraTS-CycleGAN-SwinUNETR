@@ -18,6 +18,8 @@ from swin_unetr import ImprovedSwinUNETR
 from dataset import get_data_loaders, BraTSDataset
 from torch.optim.lr_scheduler import OneCycleLR
 
+print(f"PyTorch version: {torch.__version__}")
+
 
 def parse_args():
     """Parse command line arguments"""
