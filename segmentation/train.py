@@ -277,7 +277,7 @@ def train_model(
     )
     
     # Gradient scaler for mixed precision
-    scaler = torch.amp.GradScaler(enabled=use_mixed_precision)
+    scaler = GradScaler(enabled=use_mixed_precision)
     
     # Resume from checkpoint if specified
     start_epoch = 0
