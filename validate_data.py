@@ -354,7 +354,7 @@ def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Validate BraTS processed datasets')
     parser.add_argument('--data_dir', type=str, default=None, 
-                        help='Base directory for processed data (default: /opt/repo/BraTS-CycleGAN-SwinUNETR/processed/)')
+                        help='Base directory for processed data (default: /app/BraTS-CycleGAN-SwinUNETR/processed/)')
     args = parser.parse_args()
     
     # Process base directory
@@ -363,7 +363,7 @@ def main():
         processed_base = os.path.abspath(args.data_dir)
     else:
         # Default to the project repository path 
-        processed_base = "/opt/repo/BraTS-CycleGAN-SwinUNETR/processed/"
+        processed_base = "/app/BraTS-CycleGAN-SwinUNETR/processed/"
     
     # Processed dataset paths
     PROCESSED_TRAINING_PATH = os.path.join(processed_base, "brats128_training")
