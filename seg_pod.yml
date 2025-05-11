@@ -27,7 +27,7 @@ spec:
           mkdir -p extracted_data
           mkdir -p output
 
-          tar -xzf /data/brats128_processed_20250502_040703.tar.gz -C extracted_data
+          tar -xzf /data/brats128_processed_20250511_010604.tar.gz -C extracted_data
 
           du -sh extracted_data/*
 
