@@ -453,46 +453,33 @@ def split_dataset_three_way(input_folder: str, output_folder: str, seg_ratio=0.4
     return split_info
 
 
-def merge_cyclegan_datasets(training_cyclegan_path: str, validation_data_path: str, output_path: str):
+def add_validation_to_cyclegan(cyclegan_path: str, validation_data_path: str):
     """
-    Merge CycleGAN images from training split with validation data
+    Add validation images to an existing CycleGAN dataset
     
     Args:
-        training_cyclegan_path (str): Path to CycleGAN images from training split
+        cyclegan_path (str): Path to existing CycleGAN images
         validation_data_path (str): Path to the processed validation data
-        output_path (str): Path to save the combined CycleGAN dataset
     """
-    print(f"Merging CycleGAN datasets...")
-    
-    # Create output directory
-    output_path = Path(output_path)
-    output_path.mkdir(parents=True, exist_ok=True)
-    (output_path / 'images').mkdir(exist_ok=True)
+    print(f"Adding validation images to CycleGAN dataset...")
     
     # Get file lists
-    train_images = glob.glob(f"{training_cyclegan_path}/images/*.npy")
+    existing_images = glob.glob(f"{cyclegan_path}/images/*.npy")
     val_images = glob.glob(f"{validation_data_path}/images/*.npy")
     
-    print(f"Found {len(train_images)} training images and {len(val_images)} validation images")
-    
-    # Copy training cyclegan images
-    print(f"Copying training CycleGAN images...")
-    for src in train_images:
-        dest = os.path.join(output_path / 'images', os.path.basename(src))
-        shutil.copy2(src, dest)
+    print(f"Found {len(existing_images)} existing images and {len(val_images)} validation images")
     
     # Copy validation images
     print(f"Copying validation images...")
     for src in val_images:
-        dest = os.path.join(output_path / 'images', os.path.basename(src))
+        dest = os.path.join(cyclegan_path, 'images', os.path.basename(src))
         shutil.copy2(src, dest)
     
     # Count total files
-    total_images = len(glob.glob(f"{output_path}/images/*.npy"))
+    total_images = len(glob.glob(f"{cyclegan_path}/images/*.npy"))
     
-    print(f"CycleGAN dataset creation complete:")
-    print(f"  Total images: {total_images} (from {len(train_images)} training + {len(val_images)} validation)")
-
+    print(f"CycleGAN dataset update complete:")
+    print(f"  Total images: {total_images} (added {len(val_images)} validation images)")
 
 def create_complete_dataset(
     training_data_path: str,
@@ -580,21 +567,20 @@ def create_complete_dataset(
     else:
         print(f"WARNING: No training data found to split. Skipping split step.")
     
-    # Step 4: Merge CycleGAN images from training with validation data
-    print("\n=== STEP 4: MERGING CYCLEGAN DATASETS ===")
+    # Step 4: Add validation images to CycleGAN dataset
+    print("\n=== STEP 4: ADDING VALIDATION IMAGES TO CYCLEGAN DATASET ===")
     # Check if there's training cyclegan and validation data
     train_cyclegan_images = len(glob.glob(f"{dataset_path}/cyclegan/images/*.npy"))
     val_images = len(glob.glob(f"{raw_validation_path}/images/*.npy"))
-    
-    if train_cyclegan_images > 0 or val_images > 0:
+
+    if train_cyclegan_images > 0 and val_images > 0:
         print(f"Found {train_cyclegan_images} training cyclegan images and {val_images} validation images")
-        merge_cyclegan_datasets(
+        add_validation_to_cyclegan(
             f"{dataset_path}/cyclegan",
-            raw_validation_path,
-            f"{dataset_path}/cyclegan"
+            raw_validation_path
         )
     else:
-        print(f"WARNING: No data found for CycleGAN dataset. Skipping CycleGAN dataset creation.")
+        print(f"WARNING: No data found for CycleGAN dataset. Skipping validation image addition.")
     
     print(f"\n=== COMPLETE DATASET PREPARATION FINISHED ===")
 
